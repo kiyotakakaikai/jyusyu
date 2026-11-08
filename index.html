@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>樹種カメラ（試作）</title>
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#000;color:#fff;font-family:-apple-system,"Hiragino Sans",sans-serif;overflow:hidden}
+#stage{position:fixed;inset:0;background:#111}
+video{width:100%;height:100%;object-fit:cover}
+#reticle{position:absolute;left:50%;top:42%;width:56vmin;height:56vmin;transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.7);border-radius:18px;pointer-events:none}
+#reticle::before,#reticle::after{content:"";position:absolute;width:24px;height:24px;border:4px solid #7CFC8A}
+#reticle::before{left:-3px;top:-3px;border-right:0;border-bottom:0;border-radius:18px 0 0 0}
+#reticle::after{right:-3px;bottom:-3px;border-left:0;border-top:0;border-radius:0 0 18px 0}
+#label{position:absolute;left:50%;top:42%;transform:translate(-50%,calc(-28vmin - 100%));background:rgba(20,40,25,.88);border:1px solid #7CFC8A;border-radius:14px;padding:10px 16px;min-width:180px;text-align:center;display:none}
+#label::after{content:"";position:absolute;left:50%;bottom:-10px;margin-left:-8px;border:8px solid transparent;border-top-color:#7CFC8A;border-bottom:0}
+#label .n{font-size:22px;font-weight:700}
+#label .s{font-size:12px;opacity:.8;margin-top:2px}
+#label .p{font-size:13px;color:#7CFC8A;margin-top:4px}
+#hint{position:absolute;left:0;right:0;top:calc(env(safe-area-inset-top) + 12px);text-align:center;font-size:13px;text-shadow:0 1px 4px #000;padding:0 12px}
+#sheet{position:absolute;left:0;right:0;bottom:0;background:rgba(15,15,15,.92);border-radius:20px 20px 0 0;padding:12px 14px calc(env(safe-area-inset-bottom) + 12px)}
+#cands{font-size:13px;max-height:22vh;overflow:auto;margin-bottom:8px}
+#cands div{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #333}
+.row{display:flex;gap:8px;align-items:center}
+select,button{font:inherit;border-radius:12px;border:0;padding:12px}
+select{background:#2a2a2a;color:#fff;flex:0 0 auto}
+button{background:#2a2a2a;color:#fff}
+#shot{flex:1;background:#2e9e4a;font-weight:700;font-size:16px}
+#shot:disabled{opacity:.5}
+.tgl{font-size:12px;display:flex;gap:4px;align-items:center;white-space:nowrap}
+#msg{font-size:12px;color:#ffd27c;margin-bottom:6px;min-height:0}
+#dlg{position:absolute;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;padding:20px;z-index:5}
+#dlg>div{background:#1b1b1b;border-radius:16px;padding:18px;width:100%;max-width:420px;font-size:13px;line-height:1.6}
+#dlg input{width:100%;padding:10px;border-radius:8px;border:1px solid #444;background:#000;color:#fff;margin:8px 0;font-size:14px}
+a{color:#7CFC8A}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="v" playsinline muted autoplay></video>
+  <div id="reticle"></div>
+  <div id="label"><div class="n" id="ln"></div><div class="s" id="ls"></div><div class="p" id="lp"></div></div>
+  <div id="hint">葉・樹皮に寄って、枠に入れて撮影</div>
+  <div id="sheet">
+    <div id="msg"></div>
+    <div id="cands"></div>
+    <div class="row">
+      <select id="organ">
+        <option value="auto">自動</option>
+        <option value="leaf">葉</option>
+        <option value="bark">樹皮</option>
+        <option value="flower">花</option>
+        <option value="fruit">実</option>
+      </select>
+      <button id="shot">判定する</button>
+      <button id="gear">設定</button>
+    </div>
+    <div class="row" style="margin-top:8px;justify-content:space-between">
+      <label class="tgl"><input type="checkbox" id="auto"> 5秒ごと自動判定</label>
+      <button id="pick" style="padding:8px 12px;font-size:12px">写真を選ぶ/撮る</button>
+    </div>
+  </div>
+  <input type="file" id="file" accept="image/*" capture="environment" hidden>
+</div>
+
+<div id="dlg"><div>
+  <b>設定</b><br>
+  判定には無料のPl@ntNet APIキーが必要です。<br>
+  <a href="https://my.plantnet.org/" target="_blank" rel="noopener">my.plantnet.org</a> で登録→APIキーを貼り付け。無料枠は1日500回程度（要確認）。<br>
+  <input id="key" placeholder="APIキー" autocomplete="off">
+  <label class="tgl"><input type="checkbox" id="demo"> キー無しでデモ表示（ダミー結果）</label>
+  <div class="row" style="margin-top:10px"><button id="save" style="flex:1;background:#2e9e4a">保存</button><button id="close">閉じる</button></div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const store={get(k){try{return localStorage.getItem(k)||""}catch(e){return ""}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+let busy=false,timer=null,stream=null,camOK=false;
+
+async function startCam(){
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){noCam("この開き方ではライブカメラ不可（HTTPS必須）");return}
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280}},audio:false});
+    $("v").srcObject=stream;camOK=true;
+  }catch(e){noCam("カメラを開けません（許可設定を確認）")}
+}
+function msg(t){$("msg").textContent=t||""}
+function noCam(t){
+  msg(t);
+  $("hint").innerHTML="<b>ライブ映像は使えません</b><br>下の緑のボタンで撮影すれば判定できます";
+  $("stage").style.background="#1c2a1f";$("reticle").style.display="none";
+  const p=$("pick");p.style.background="#2e9e4a";p.style.fontSize="16px";p.style.padding="14px 16px";p.style.fontWeight="700";
+}
+
+function frameBlob(){
+  return new Promise((res,rej)=>{
+    const v=$("v");if(!v.videoWidth){rej(new Error("no video"));return}
+    const s=Math.min(1,1024/Math.max(v.videoWidth,v.videoHeight));
+    const c=document.createElement("canvas");c.width=v.videoWidth*s;c.height=v.videoHeight*s;
+    c.getContext("2d").drawImage(v,0,0,c.width,c.height);
+    c.toBlob(b=>b?res(b):rej(new Error("blob")),"image/jpeg",.82);
+  });
+}
+function shrink(file){
+  return new Promise((res,rej)=>{
+    const img=new Image();img.onload=()=>{
+      const s=Math.min(1,1024/Math.max(img.width,img.height));
+      const c=document.createElement("canvas");c.width=img.width*s;c.height=img.height*s;
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      c.toBlob(b=>b?res(b):rej(new Error("blob")),"image/jpeg",.82);
+    };img.onerror=()=>rej(new Error("img"));img.src=URL.createObjectURL(file);
+  });
+}
+
+async function identify(blob){
+  const key=store.get("pn_key");
+  if(!key){
+    if(store.get("pn_demo")==="1"){
+      await new Promise(r=>setTimeout(r,600));
+      return [{score:.62,names:["ソメイヨシノ"],sci:"Prunus × yedoensis",fam:"Rosaceae"},{score:.18,names:["ヤマザクラ"],sci:"Prunus jamasakura",fam:"Rosaceae"},{score:.07,names:["ウメ"],sci:"Prunus mume",fam:"Rosaceae"}];
+    }
+    throw new Error("NOKEY");
+  }
+  const fd=new FormData();
+  fd.append("images",blob,"photo.jpg");
+  fd.append("organs",$("organ").value);
+  const url="https://my-api.plantnet.org/v2/identify/all?include-related-images=false&nb-results=5&lang=ja&api-key="+encodeURIComponent(key);
+  const r=await fetch(url,{method:"POST",body:fd});
+  if(!r.ok){
+    if(r.status===401||r.status===403)throw new Error("キーが無効です");
+    if(r.status===404)throw new Error("植物として認識できませんでした");
+    if(r.status===429)throw new Error("本日の無料枠を使い切りました");
+    throw new Error("サーバーエラー("+r.status+")");
+  }
+  const j=await r.json();
+  return (j.results||[]).map(x=>({score:x.score,names:x.species.commonNames||[],sci:x.species.scientificNameWithoutAuthor,fam:(x.species.family||{}).scientificNameWithoutAuthor||""}));
+}
+
+function show(list){
+  if(!list.length){msg("候補なし。葉か樹皮にもっと寄ってください。");return}
+  const t=list[0],pct=Math.round(t.score*100);
+  $("ln").textContent=t.names[0]||t.sci;
+  $("ls").textContent=t.sci+(t.fam?"（"+t.fam+"）":"");
+  $("lp").textContent=pct>=50?"確信度 "+pct+"%":"確信度 "+pct+"%（要確認）";
+  $("label").style.display="block";
+  $("cands").innerHTML=list.map(x=>`<div><span>${esc(x.names[0]||x.sci)}<small style="opacity:.6"> ${esc(x.sci)}</small></span><b>${Math.round(x.score*100)}%</b></div>`).join("");
+  msg(pct<40?"確信度が低めです。葉を正面から/樹皮をアップで撮り直すと改善します。":"");
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function run(getBlob){
+  if(busy)return;busy=true;$("shot").disabled=true;$("shot").textContent="判定中…";
+  try{show(await identify(await getBlob()))}
+  catch(e){
+    if(e.message==="NOKEY"){msg("APIキー未設定です。「設定」から入力してください。");$("dlg").style.display="flex"}
+    else msg(e.message==="Failed to fetch"?"通信に失敗（ネット接続/CORS制限の可能性）":e.message);
+  }
+  busy=false;$("shot").disabled=false;$("shot").textContent="判定する";
+}
+
+$("shot").onclick=()=>run(frameBlob);
+$("pick").onclick=()=>$("file").click();
+$("file").onchange=e=>{const f=e.target.files[0];if(f)run(()=>shrink(f));e.target.value=""};
+$("auto").onchange=e=>{
+  clearInterval(timer);
+  if(e.target.checked){if(!camOK){e.target.checked=false;msg("自動判定にはライブカメラが必要です");return}timer=setInterval(()=>run(frameBlob),5000)}
+};
+$("gear").onclick=()=>{$("key").value=store.get("pn_key");$("demo").checked=store.get("pn_demo")==="1";$("dlg").style.display="flex"};
+$("close").onclick=()=>$("dlg").style.display="none";
+$("save").onclick=()=>{store.set("pn_key",$("key").value.trim());store.set("pn_demo",$("demo").checked?"1":"0");$("dlg").style.display="none";msg("保存しました")};
+startCam();
+</script>
+</body>
+</html>
