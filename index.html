@@ -153,6 +153,8 @@ a{color:#7CFC8A}
   <div id="map"></div>
   <div id="mapmsg"></div>
   <button id="locate">◎ 現在地</button>
+  <div id="moveBar" style="display:none;position:absolute;left:10px;right:10px;bottom:20px;z-index:600;background:rgba(15,15,15,.95);border-radius:14px;padding:10px;gap:8px;align-items:center;flex-wrap:wrap">
+    <span id="moveTxt" style="flex:1 1 100%;font-size:13px"></span><button id="moveOk" class="primary" style="flex:1">この位置で確定</button><button id="moveNg" style="flex:1">取消</button></div>
 </section>
 
 <section id="v-list" class="view">
@@ -162,7 +164,7 @@ a{color:#7CFC8A}
     <div class="sum" id="sum"></div>
     <input id="q" placeholder="番号・管理番号・樹種・所在・判定で検索" style="width:100%">
     <div class="tools">
-      <button id="report" class="sm primary">報告書PDF</button><button id="csv" class="sm">CSV出力</button>
+      <button id="chkBtn" class="sm">提出前チェック</button><button id="report" class="sm primary">報告書PDF</button><button id="ledgerBtn" class="sm">台帳取込</button><button id="csv" class="sm">CSV出力</button>
       <button id="syncNow" class="sm">同期</button><button id="backup" class="sm">バックアップ</button><button id="restoreBtn" class="sm">復元</button>
     </div>
     <div id="list"></div>
@@ -211,10 +213,14 @@ a{color:#7CFC8A}
       <div><label>樹勢（活力）</label><select id="gVig"><option>良好</option><option>やや不良</option><option>不良</option><option>著しく不良</option><option>枯死</option></select></div>
       <div><label>枯枝</label><select id="gDead"><option>なし</option><option>少ない</option><option>多い</option></select></div>
     </div>
+    <label style="margin-top:12px">活力</label>
+    <div class="grid2" id="gVital"></div>
     <label style="margin-top:12px">部位別の異常（該当にチェック）</label>
     <table class="mx" id="gMx"></table>
     <label style="margin-top:12px">根系・その他</label>
     <div class="chips" id="gRoots"></div>
+    <label style="margin-top:12px">支障（街路・園路への影響）</label>
+    <div class="chips" id="gObst"></div>
     <div class="grid2">
       <div><label>病害虫</label><select id="gPest"><option>なし</option><option>あり</option></select></div>
       <div><label>病害虫の内容</label><input id="gPestN"></div>
@@ -243,7 +249,7 @@ a{color:#7CFC8A}
 
     <h3>位置</h3>
     <div id="dPos" class="sub" style="opacity:1"></div>
-    <div class="row" style="margin-top:8px"><button id="dPosUpd" style="flex:1">現在地で更新</button><button id="dMap" style="flex:1">地図で見る</button></div>
+    <div class="row" style="margin-top:8px"><button id="dPosUpd" style="flex:1">現在地で更新</button><button id="dMove" style="flex:1">地図で補正</button><button id="dMap" style="flex:1">地図で見る</button></div>
 
     <h3>メモ</h3>
     <textarea id="dMemo" rows="3" placeholder="管理者、周辺状況、申し送りなど"></textarea>
@@ -252,6 +258,17 @@ a{color:#7CFC8A}
   </div>
 </div>
 
+<!-- 近くの木を選ぶ -->
+<div id="near" class="full">
+  <div class="dhead"><b>近くに登録済みの木があります</b></div>
+  <div class="dbody"><p class="sub" id="nearHint" style="margin-bottom:10px;font-size:14px;opacity:1"></p><div id="nearList"></div>
+  <button id="nearNew" class="primary" style="width:100%;margin-top:10px">別の木（新規登録）</button><button id="nearCancel" style="width:100%;margin-top:10px">やめる</button></div>
+</div>
+<!-- 提出前チェック -->
+<div id="check" class="full">
+  <div class="dhead"><button id="chkClose">← 戻る</button><b>提出前チェック</b></div>
+  <div class="dbody"><p id="chkSum" style="margin-bottom:10px"></p><div id="chkList"></div></div>
+</div>
 <!-- 写真ビューア -->
 <div id="viewer" class="full">
   <img id="vImg" alt="">
@@ -317,10 +334,11 @@ a{color:#7CFC8A}
 <div id="printArea"></div>
 <input type="file" id="file" accept="image/*" capture="environment" hidden>
 <input type="file" id="addFile" accept="image/*" hidden>
+<input type="file" id="ledgerFile" accept=".csv,text/csv,text/plain" hidden>
 <input type="file" id="restoreFile" accept="application/json,.json" hidden>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="dict.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="dict.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
