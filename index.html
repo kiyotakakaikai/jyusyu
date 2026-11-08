@@ -139,21 +139,40 @@ async function identify(blob){
   return (j.results||[]).map(x=>({score:x.score,names:x.species.commonNames||[],sci:x.species.scientificNameWithoutAuthor,fam:(x.species.family||{}).scientificNameWithoutAuthor||""}));
 }
 
-function show(list){
-  if(!list.length){msg("候補なし。葉か樹皮にもっと寄ってください。");return}
+const JA_RE=/[\u3040-\u30ff\u4e00-\u9fff]/;
+const DICT={"Prunus × yedoensis":"ソメイヨシノ","Prunus yedoensis":"ソメイヨシノ","Prunus jamasakura":"ヤマザクラ","Prunus mume":"ウメ","Ginkgo biloba":"イチョウ","Cinnamomum camphora":"クスノキ","Zelkova serrata":"ケヤキ","Acer palmatum":"イロハモミジ","Quercus serrata":"コナラ","Quercus acutissima":"クヌギ","Pinus densiflora":"アカマツ","Pinus thunbergii":"クロマツ","Cryptomeria japonica":"スギ","Chamaecyparis obtusa":"ヒノキ","Camellia japonica":"ヤブツバキ","Magnolia kobus":"コブシ","Cornus florida":"ハナミズキ","Castanea crenata":"クリ","Diospyros kaki":"カキ","Lagerstroemia indica":"サルスベリ","Aucuba japonica":"アオキ","Salix babylonica":"シダレヤナギ"};
+const jaCache={};
+async function toJa(sci){
+  if(DICT[sci])return DICT[sci];
+  if(sci in jaCache)return jaCache[sci];
+  try{
+    const q='SELECT ?l WHERE{?t wdt:P225 "'+sci.replace(/"/g,"")+'";rdfs:label ?l.FILTER(lang(?l)="ja")}LIMIT 1';
+    const r=await fetch("https://query.wikidata.org/sparql?format=json&query="+encodeURIComponent(q));
+    const j=await r.json();const b=j.results.bindings[0];
+    return jaCache[sci]=b?b.l.value:null;
+  }catch(e){return null}
+}
+function render(list){
   const t=list[0],pct=Math.round(t.score*100);
-  $("ln").textContent=t.names[0]||t.sci;
+  $("ln").textContent=t.ja||t.names.find(n=>JA_RE.test(n))||t.names[0]||t.sci;
   $("ls").textContent=t.sci+(t.fam?"（"+t.fam+"）":"");
   $("lp").textContent=pct>=50?"確信度 "+pct+"%":"確信度 "+pct+"%（要確認）";
   $("label").style.display="block";
-  $("cands").innerHTML=list.map(x=>`<div><span>${esc(x.names[0]||x.sci)}<small style="opacity:.6"> ${esc(x.sci)}</small></span><b>${Math.round(x.score*100)}%</b></div>`).join("");
+  $("cands").innerHTML=list.map(x=>`<div><span>${esc(x.ja||x.names.find(n=>JA_RE.test(n))||x.names[0]||x.sci)}<small style="opacity:.6"> ${esc(x.sci)}</small></span><b>${Math.round(x.score*100)}%</b></div>`).join("");
+}
+async function show(list){
+  if(!list.length){msg("候補なし。葉か樹皮にもっと寄ってください。");return}
+  render(list);
+  const pct=Math.round(list[0].score*100);
   msg(pct<40?"確信度が低めです。葉を正面から/樹皮をアップで撮り直すと改善します。":"");
+  await Promise.all(list.map(async x=>{const jp=x.names.find(n=>JA_RE.test(n));if(!jp)x.ja=await toJa(x.sci);else x.ja=jp}));
+  render(list);
 }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 async function run(getBlob){
   if(busy)return;busy=true;$("shot").disabled=true;$("shot").textContent="判定中…";
-  try{show(await identify(await getBlob()))}
+  try{await show(await identify(await getBlob()))}
   catch(e){
     if(e.message==="NOKEY"){msg("APIキー未設定です。「設定」から入力してください。");$("dlg").style.display="flex"}
     else msg(e.message==="Failed to fetch"?"通信に失敗（ネット接続/CORS制限の可能性）":e.message);
