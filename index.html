@@ -129,7 +129,8 @@ async function identify(blob){
   const url="https://my-api.plantnet.org/v2/identify/all?include-related-images=false&nb-results=5&lang=ja&api-key="+encodeURIComponent(key);
   const r=await fetch(url,{method:"POST",body:fd});
   if(!r.ok){
-    if(r.status===401||r.status===403)throw new Error("キーが無効です");
+    if(r.status===401)throw new Error("キーが無効です（コピー漏れ/private keyか確認）");
+    if(r.status===403)throw new Error("ドメイン未許可：PlantNet側で「expose my API key」と許可ドメインの設定が必要です");
     if(r.status===404)throw new Error("植物として認識できませんでした");
     if(r.status===429)throw new Error("本日の無料枠を使い切りました");
     throw new Error("サーバーエラー("+r.status+")");
