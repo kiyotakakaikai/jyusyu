@@ -46,7 +46,10 @@ video{width:100%;height:100%;object-fit:cover}
 .pin-b{width:34px;height:34px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.6)}
 .leaflet-popup-content button{color:#fff;margin-top:6px;padding:8px 10px}
 /* 判定色 */
-.j-none{background:#666}.j-A{background:#2e9e4a}.j-B1{background:#b59a14}.j-B2{background:#d07a12}.j-C{background:#c0392b}
+.j-none{background:#777;color:#fff}.j-A{background:#1f6fd1;color:#fff}.j-B1{background:#f2c200;color:#111}.j-B2{background:#e67e22;color:#111}.j-C{background:#d0281f;color:#fff}.j-cut{background:#111;color:#fff;outline:1px solid #888}.j-empty{background:#fff;color:#333;outline:1px solid #888}
+.legend{display:flex;flex-wrap:wrap;gap:4px;font-size:11px;background:rgba(255,255,255,.9);padding:5px;border-radius:8px;max-width:260px}
+.legend span{padding:2px 6px;border-radius:6px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+#printArea .legend{max-width:none;margin-top:4px}
 /* 一覧 */
 #v-list{overflow:auto;padding:calc(env(safe-area-inset-top) + 10px) 12px 20px}
 .wrap{max-width:900px;margin:0 auto}
@@ -82,7 +85,7 @@ video{width:100%;height:100%;object-fit:cover}
 .judge{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .judge button{padding:12px 0;font-size:17px;font-weight:700;border:2px solid transparent;background:#262626}
 .judge button.on{border-color:#fff}
-.judge button.on.jA{background:#2e9e4a}.judge button.on.jB1{background:#b59a14}.judge button.on.jB2{background:#d07a12}.judge button.on.jC{background:#c0392b}
+.judge button.on.jA{background:#1f6fd1}.judge button.on.jB1{background:#f2c200;color:#111}.judge button.on.jB2{background:#e67e22;color:#111}.judge button.on.jC{background:#d0281f}
 table.mx{width:100%;border-collapse:collapse;font-size:13px}
 table.mx th,table.mx td{border-bottom:1px solid #2c2c2c;padding:7px 4px;text-align:center}
 table.mx th:first-child,table.mx td:first-child{text-align:left}
@@ -121,7 +124,7 @@ a{color:#7CFC8A}
   #printArea .note{font-size:8pt;color:#444}
   .smap{position:relative;overflow:hidden;border:1px solid #888}
   .smap img{position:absolute;width:256px;height:256px;max-width:none}
-  .smap .pin{position:absolute;transform:translate(-50%,-50%);background:#c00;color:#fff;border:2px solid #fff;border-radius:50%;min-width:22px;height:22px;font-size:8pt;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px}
+  .smap .pin{position:absolute;transform:translate(-50%,-50%);-webkit-print-color-adjust:exact;print-color-adjust:exact;color:#fff;border:2px solid #fff;border-radius:50%;min-width:22px;height:22px;font-size:8pt;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px}
 }
 </style>
 </head>
@@ -191,8 +194,13 @@ a{color:#7CFC8A}
     <div class="row" style="margin-top:6px"><button id="dDict" class="sm">学名→和名を辞書に登録</button></div>
     <label>所在（路線名・公園名・住所）</label><input id="dPlace" placeholder="例：〇〇公園 北側園路">
 
+    <div class="grid2">
+      <div><label>状態</label><select id="dStatus"><option value="live">現存</option><option value="cut">伐採済</option><option value="empty">空き桝・欠損</option></select></div>
+      <div><label>状態の日付</label><input id="dStatusAt" type="date"></div>
+    </div>
     <h3>写真</h3>
     <div id="dPhotos" class="gal"></div>
+    <button id="dGhost" style="width:100%;margin-top:8px">◎ 前回と同じ構図で全景を撮る</button>
     <div class="row" style="margin-top:8px">
       <select id="dOrgan" style="width:auto"><option value="whole">全景</option><option value="damage">被害部</option><option value="root">根元</option><option value="trunk">幹</option><option value="branch">大枝</option><option value="leaf">葉</option><option value="bark">樹皮</option></select>
       <button id="dAddPhoto" style="flex:1">＋ 写真を追加</button>
@@ -244,6 +252,8 @@ a{color:#7CFC8A}
     <label>所見</label><textarea id="gNote" rows="3"></textarea>
     <div class="row" style="margin-top:12px"><button id="gSave" class="primary" style="flex:1">診断を保存</button><button id="gNew" class="sm">新規入力に戻す</button></div>
 
+    <h3>経年比較</h3>
+    <div id="dCmp"></div>
     <h3>診断履歴</h3>
     <div id="dHist"></div>
 
@@ -269,6 +279,16 @@ a{color:#7CFC8A}
   <div class="dhead"><button id="chkClose">← 戻る</button><b>提出前チェック</b></div>
   <div class="dbody"><p id="chkSum" style="margin-bottom:10px"></p><div id="chkList"></div></div>
 </div>
+<!-- 同じ構図で撮る -->
+<div id="ghost" class="full" style="background:#000">
+  <video id="ghV" playsinline muted autoplay style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+  <img id="ghImg" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.4;pointer-events:none">
+  <div style="position:absolute;left:0;right:0;top:calc(env(safe-area-inset-top) + 10px);text-align:center;font-size:13px;text-shadow:0 1px 3px #000" id="ghInfo"></div>
+  <div style="position:absolute;left:0;right:0;bottom:0;padding:12px 12px calc(env(safe-area-inset-bottom) + 12px);background:rgba(0,0,0,.6)">
+    <label class="tgl" style="justify-content:center">重ねる濃さ <input type="range" id="ghOp" min="0" max="0.8" step="0.05" value="0.4" style="width:50%"></label>
+    <div class="row" style="margin-top:8px"><button id="ghShot" class="primary" style="flex:1">撮影（全景として保存）</button><button id="ghClose">閉じる</button></div>
+  </div>
+</div>
 <!-- 写真ビューア -->
 <div id="viewer" class="full">
   <img id="vImg" alt="">
@@ -292,6 +312,10 @@ a{color:#7CFC8A}
     </div>
     <label>調査期間</label><input id="pPeriod" placeholder="例：令和8年11月9日〜11月20日">
     <label>報告書の前書き（任意）</label><textarea id="pIntro" rows="3"></textarea>
+    <h3>街路樹マップ（公開リンク）</h3>
+    <label class="tgl"><input type="checkbox" id="pPublic" style="width:auto"> この案件の地図をリンクで公開する</label>
+    <div class="sub" id="pShare" style="word-break:break-all"></div>
+    <button id="pCopy" class="sm" style="margin-top:6px">リンクをコピー</button>
     <button id="pSave" class="primary" style="width:100%;margin-top:14px">保存</button>
     <button id="pNew" style="width:100%;margin-top:10px">＋ 新しい案件を作る</button>
     <div class="sub" style="margin-top:10px">新しく登録するカルテは、選択中の案件に入ります。</div>
@@ -310,6 +334,9 @@ a{color:#7CFC8A}
     <div class="row" style="margin-top:8px"><button id="sTest" class="sm">接続テスト</button><button id="sSync" class="sm">今すぐ同期</button></div>
     <div class="sub" id="sSyncInfo"></div>
 
+    <h3>位置の測り方</h3>
+    <label>登録時の測位</label><select id="posSec"><option value="0">すぐ（1回）</option><option value="10">10秒平均（推奨）</option><option value="20">20秒平均</option><option value="30">30秒平均</option></select>
+    <div class="sub">平均すると数m級のばらつきは減りますが、ビル・樹冠による系統的なずれは残ります。50cm級が必要な場合は、iPhoneの位置情報を置き換えるタイプの高精度GNSS受信機（RTK）を接続すると、このアプリでもそのまま高精度になります。</div>
     <h3>判定AI（Pl@ntNet）</h3>
     <label>APIキー</label><input id="key" autocomplete="off">
     <label class="tgl" style="margin-top:8px"><input type="checkbox" id="demo"> キー無しでデモ表示（ダミー結果）</label>
@@ -338,7 +365,7 @@ a{color:#7CFC8A}
 <input type="file" id="restoreFile" accept="application/json,.json" hidden>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="dict.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="dict.js?v=6"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

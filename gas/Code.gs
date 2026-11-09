@@ -13,7 +13,21 @@ const COLS = {
   photos: ['uid', 'updatedAt', 'deleted', '樹木uid', '撮影日時', '部位', '緯度', '経度', 'ラベル付き写真', '元画像', 'json']
 };
 
-function doGet() { return ContentService.createTextOutput('樹木診断カルテ 同期API：稼働中'); }
+/* 公開地図（map.html）用：共有キーが一致し「公開」にした案件だけ、必要な項目を返す */
+function doGet(e) {
+  const k = e && e.parameter && e.parameter.k;
+  if (!k) return ContentService.createTextOutput('樹木診断カルテ 同期API：稼働中');
+  const out = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+  const all = pull(0);
+  const p = all.projects.find(x => x.shareKey === k && x.public && !x.deleted);
+  if (!p) return out({ ok: false, error: 'not found' });
+  const trees = all.trees.filter(t => t.project === p.uid && !t.deleted && t.lat != null).map(t => {
+    const d = latestDiag(t);
+    return { no: t.no, mgmtNo: t.mgmtNo || '', name: t.name || '', place: t.place || '', lat: t.lat, lng: t.lng, status: t.status || 'live', statusAt: t.statusAt || '',
+      judge: d.judge || '', at: d.at || null, g: d.g || '', h: d.h || '', reason: d.reason || '', acts: (d.acts || []).join('・'), next: d.next || '', thumb: t.thumb || '' };
+  });
+  return out({ ok: true, project: { name: p.name, title: p.title || '', client: p.client || '' }, trees: trees, at: Date.now() });
+}
 
 function doPost(e) {
   const out = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);

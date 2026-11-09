@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow"><title>街路樹マップ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box;margin:0}html,body{height:100%;font-family:-apple-system,"Hiragino Sans","Yu Gothic UI",sans-serif}
+#map{position:absolute;inset:0}
+#bar{position:absolute;left:10px;right:10px;top:calc(env(safe-area-inset-top) + 10px);z-index:600;background:rgba(255,255,255,.95);border-radius:12px;padding:8px 10px;box-shadow:0 1px 6px rgba(0,0,0,.3);font-size:13px}
+#bar b{font-size:15px}#bar .row{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+#q{flex:1;min-width:120px;padding:7px;border:1px solid #ccc;border-radius:8px;font-size:14px}
+.f{display:flex;gap:3px;align-items:center;padding:3px 7px;border-radius:7px;font-size:12px;cursor:pointer;user-select:none}
+.f input{margin:0}
+.pin{width:30px;height:30px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.j-none{background:#777;color:#fff}.j-A{background:#1f6fd1;color:#fff}.j-B1{background:#f2c200;color:#111}.j-B2{background:#e67e22;color:#111}.j-C{background:#d0281f;color:#fff}.j-cut{background:#111;color:#fff}.j-empty{background:#fff;color:#333;border-color:#888}
+.pop img{width:180px;border-radius:6px;margin-top:4px}.pop td{padding:1px 4px;vertical-align:top}.pop th{text-align:left;padding:1px 4px;white-space:nowrap;color:#555;font-weight:normal}
+#msg{position:absolute;left:0;right:0;top:45%;text-align:center;z-index:700;font-size:15px}
+</style></head><body>
+<div id="map"></div>
+<div id="bar"><b id="title">街路樹マップ</b> <span id="cnt"></span>
+  <div class="row"><input id="q" placeholder="番号・管理番号・樹種・所在で検索"></div>
+  <div class="row" id="filters"></div></div>
+<div id="msg">読み込み中…</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const P=new URLSearchParams(location.search),API=P.get("api"),K=P.get("k");
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const CAT={A:"A 健全",B1:"B1 注意",B2:"B2 要処置",C:"C 伐採推奨",cut:"伐採済",none:"未診断",empty:"空き桝"};
+const JT={A:"健全か健全に近い",B1:"注意すべき被害が見られる",B2:"著しい被害が見られる",C:"不健全"};
+const cat=t=>t.status==="cut"?"cut":t.status==="empty"?"empty":(t.judge||"none");
+const ymd=ts=>{if(!ts)return"";const d=new Date(ts);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+let trees=[],on=new Set(Object.keys(CAT)),layer,map,fitted=false;
+function draw(){
+  const q=document.getElementById("q").value.trim().toLowerCase();
+  layer.clearLayers();
+  const vis=trees.filter(t=>on.has(cat(t))&&(!q||[t.no,"No."+String(t.no).padStart(3,"0"),t.mgmtNo,t.name,t.place].join(" ").toLowerCase().includes(q)));
+  vis.forEach(t=>{const c=cat(t);
+    L.marker([t.lat,t.lng],{icon:L.divIcon({className:"",html:`<div class="pin j-${c}">${t.no}</div>`,iconSize:[30,30],iconAnchor:[15,15]})})
+    .bindPopup(`<div class="pop"><b>No.${String(t.no).padStart(3,"0")}${t.mgmtNo?"（"+esc(t.mgmtNo)+"）":""} ${esc(t.name||"樹種未確定")}</b>
+    <table><tr><th>状態</th><td><span class="j-${c}" style="padding:1px 6px;border-radius:5px">${esc(CAT[c])}</span>${t.statusAt?" "+esc(t.statusAt):""}</td></tr>
+    ${t.judge?`<tr><th>判定</th><td>${esc(JT[t.judge]||"")}（${ymd(t.at)}）</td></tr>`:""}
+    ${t.place?`<tr><th>所在</th><td>${esc(t.place)}</td></tr>`:""}
+    ${t.g||t.h?`<tr><th>幹周/樹高</th><td>${esc(t.g||"-")}cm / ${esc(t.h||"-")}m</td></tr>`:""}
+    ${t.reason?`<tr><th>理由</th><td>${esc(t.reason)}</td></tr>`:""}${t.acts?`<tr><th>処置</th><td>${esc(t.acts)}</td></tr>`:""}</table>
+    ${t.thumb?`<img src="${t.thumb}">`:""}</div>`).addTo(layer)});
+  document.getElementById("cnt").textContent=`${vis.length}/${trees.length}本`;
+  if(!fitted&&vis.length){map.fitBounds(L.latLngBounds(vis.map(t=>[t.lat,t.lng])),{padding:[60,60],maxZoom:19});fitted=true}
+}
+(async()=>{
+  map=L.map("map",{zoomControl:false}).setView([35.681,139.767],12);L.control.zoom({position:"bottomright"}).addTo(map);
+  const att='<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>';
+  const std=L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",{maxNativeZoom:18,maxZoom:21,attribution:att}).addTo(map);
+  const ph=L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",{maxNativeZoom:18,maxZoom:21,attribution:att});
+  L.control.layers({"地図":std,"航空写真":ph},null,{position:"bottomleft"}).addTo(map);layer=L.layerGroup().addTo(map);
+  document.getElementById("filters").innerHTML=Object.keys(CAT).map(k=>`<label class="f j-${k}"><input type="checkbox" data-k="${k}" checked>${CAT[k]}</label>`).join("");
+  document.getElementById("filters").onchange=e=>{const k=e.target.dataset.k;e.target.checked?on.add(k):on.delete(k);draw()};
+  document.getElementById("q").oninput=draw;
+  if(!API||!K){document.getElementById("msg").textContent="リンクが不完全です";return}
+  try{const r=await(await fetch(API+(API.includes("?")?"&":"?")+"k="+encodeURIComponent(K))).json();
+    if(!r.ok)throw new Error(r.error==="not found"?"この地図は公開されていません":r.error);
+    trees=r.trees;document.getElementById("title").textContent=r.project.title||r.project.name;document.title=(r.project.title||r.project.name)+"｜街路樹マップ";
+    document.getElementById("msg").style.display="none";draw();
+  }catch(e){document.getElementById("msg").textContent="読み込めません："+e.message}
+})();
+</script></body></html>

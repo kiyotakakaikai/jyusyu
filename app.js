@@ -22,11 +22,36 @@ function msg(t) { $("msg").textContent = t || ""; }
 let toastT = null;
 function toast(t, ms = 2200) { const e = $("toast"); e.textContent = t; e.style.display = "block"; clearTimeout(toastT); toastT = setTimeout(() => e.style.display = "none", ms); }
 
+const r1 = x => Math.round(x * 10) / 10;
+/* 複数回測位して、精度の良い半分を重み付き平均（外部の高精度GNSS受信機を使う場合は自動で高精度になる） */
+function getPosAvg(sec) {
+  sec = sec == null ? +(store.get("pos_sec") || 10) : sec;
+  if (!sec) return getPos();
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    const pts = []; let id = null, done = false;
+    const fin = () => {
+      if (done) return; done = true; navigator.geolocation.clearWatch(id); clearTimeout(tm);
+      if (!pts.length) return res(null);
+      pts.sort((a, b) => a.acc - b.acc);
+      const use = pts.slice(0, Math.max(1, Math.ceil(pts.length / 2)));
+      let w = 0, la = 0, ln = 0;
+      use.forEach(p => { const k = 1 / Math.max(p.acc, .05) ** 2; w += k; la += p.lat * k; ln += p.lng * k; });
+      res({ lat: la / w, lng: ln / w, acc: r1(use[0].acc), n: pts.length });
+    };
+    const tm = setTimeout(fin, sec * 1000);
+    id = navigator.geolocation.watchPosition(p => {
+      pts.push({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy });
+      toast(`測位中… ${pts.length}回　現在±${r1(p.coords.accuracy)}m`, 1500);
+      if (pts.length >= 3 && p.coords.accuracy <= .5) fin();
+    }, () => { if (!pts.length) fin(); }, { enableHighAccuracy: true, maximumAge: 0, timeout: sec * 1000 });
+  });
+}
 function getPos() {
   return new Promise(res => {
     if (!navigator.geolocation) return res(null);
     navigator.geolocation.getCurrentPosition(
-      p => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) }),
+      p => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: r1(p.coords.accuracy) }),
       () => res(null), { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
   });
 }
@@ -116,10 +141,20 @@ async function drawProjSel() {
   $("projSel").innerHTML = ps.map(p => `<option value="${p.uid}" ${curProj && p.uid === curProj.uid ? "selected" : ""}>${esc(p.name)}</option>`).join("") + `<option value="__all" ${store.get("list_all") === "1" ? "selected" : ""}>（すべての案件）</option>`;
   if (store.get("list_all") === "1") $("projSel").value = "__all";
 }
+function shareUrl(p) {
+  if (!p.public || !p.shareKey || !store.get("gas_url")) return "";
+  return new URL("map.html", location.href).href.split("?")[0] + "?api=" + encodeURIComponent(store.get("gas_url")) + "&k=" + p.shareKey;
+}
+function drawShare(p) {
+  const u = shareUrl(p);
+  $("pShare").textContent = p.public ? (u || "同期（設定→PCと同期）を設定すると、リンクを発行できます") : "公開していません";
+  $("pCopy").disabled = !u;
+}
 function openProj(p) {
   $("pName").value = p.name || ""; $("pTitle").value = p.title || ""; $("pClient").value = p.client || "";
   $("pContractor").value = p.contractor || ""; $("pInspector").value = p.inspector || ""; $("pLicense").value = p.license || "";
   $("pPeriod").value = p.period || ""; $("pIntro").value = p.intro || "";
+  $("pPublic").checked = !!p.public; drawShare(p);
   $("proj").classList.add("on");
 }
 
@@ -264,8 +299,9 @@ async function register(blob, info) {
   $("reg").disabled = true; $("manual").disabled = true; msg("位置を取得中…");
   try {
     await ensureProject();
-    const pos = await getPos();
-    if (!pos) toast("位置が取れませんでした（後で「現在地で更新」可）");
+    const pos = await getPosAvg();
+    if (!pos) toast("位置が取れませんでした（後で「地図で補正」可）");
+    else if (pos.acc > 3) setTimeout(() => toast(`位置の誤差±${pos.acc}m：「地図で補正」を推奨`, 3500), 2500);
     if (pos) {
       const lim = Math.min(40, Math.max(20, (pos.acc || 0) * 2));
       const cands = alive(await db.all("trees")).filter(t => t.lat != null && t.project === curProj.uid).map(t => ({ t, d: dist(pos, t) })).filter(x => x.d <= lim).sort((a, b) => a.d - b.d).slice(0, 6);
@@ -295,7 +331,7 @@ async function register(blob, info) {
 }
 function chooseNear(cands, hasPhoto) {
   return new Promise(res => {
-    $("nearList").innerHTML = cands.map((x, i) => { const d = latest(x.t); return `<button data-i="${i}" class="card" style="width:100%;text-align:left"><div><b>${noStr(x.t.no)}${x.t.mgmtNo ? "　" + esc(x.t.mgmtNo) : ""}　${esc(x.t.name || "樹種未確定")}</b><small>約${Math.round(x.d)}m　${esc(x.t.place || "")}</small></div><span class="badge ${jcls(d)}">${d && d.judge ? d.judge : "未"}</span></button>`; }).join("");
+    $("nearList").innerHTML = cands.map((x, i) => { const d = latest(x.t); return `<button data-i="${i}" class="card" style="width:100%;text-align:left"><div><b>${noStr(x.t.no)}${x.t.mgmtNo ? "　" + esc(x.t.mgmtNo) : ""}　${esc(x.t.name || "樹種未確定")}</b><small>約${Math.round(x.d)}m　${esc(x.t.place || "")}</small></div><span class="badge ${tcls(x.t)}">${tlab(x.t)}</span></button>`; }).join("");
     $("nearHint").textContent = hasPhoto ? "この写真をどの木に記録しますか？" : "どの木を記録しますか？";
     $("near").classList.add("on");
     const done = v => { $("near").classList.remove("on"); $("nearList").onclick = $("nearNew").onclick = $("nearCancel").onclick = null; res(v); };
@@ -314,6 +350,9 @@ function registerFromAI() {
 let cur = null, urls = [], editingId = null, judgeSel = "";
 const latest = t => alive(t.diags || []).slice().sort((a, b) => b.at - a.at)[0] || null;
 const jcls = d => "j-" + (d && d.judge ? d.judge : "none");
+const STATUS = { live: "現存", cut: "伐採済", empty: "空き桝・欠損" };
+const tcls = t => t.status === "cut" ? "j-cut" : t.status === "empty" ? "j-empty" : jcls(latest(t));
+const tlab = t => t.status === "cut" ? "伐" : t.status === "empty" ? "空" : (latest(t) && latest(t).judge) || "未";
 function freeUrls() { urls.forEach(u => URL.revokeObjectURL(u)); urls = []; }
 function buildForm() {
   $("gMx").innerHTML = `<tr><th></th>${PARTS.map(p => `<th>${p[1]}</th>`).join("")}</tr>` +
@@ -382,7 +421,8 @@ async function openDetail(id) {
   $("dSci").textContent = (t.sci ? t.sci + (t.fam ? "（" + t.fam + "）" : "") : "学名なし") + "　登録 " + fmt(t.createdAt) + (t.ai && t.ai.cands ? "　AI候補：" + t.ai.cands.map(x => `${x.n} ${Math.round(x.s * 100)}%`).join(" / ") : "");
   $("dPos").textContent = posText(t.lat, t.lng, t.acc);
   $("dMemo").value = t.memo || "";
-  fillForm(null); drawHist(); await drawPhotos();
+  $("dStatus").value = t.status || "live"; $("dStatusAt").value = t.statusAt || "";
+  fillForm(null); drawHist(); await drawPhotos(); drawCompare();
   $("detail").classList.add("on"); $("detail").scrollTop = 0;
   if (map) map.closePopup();
 }
@@ -412,6 +452,43 @@ function drawHist() {
     ${esc(d.reason || findingsText(d) || "異常なし")}${d.acts && d.acts.length ? "<br>処置：" + esc(d.acts.join("・")) : ""}${d.next ? "／" + esc(d.next) : ""}${d.note ? "<br>所見：" + esc(d.note) : ""}</div>`).join("")
     : '<div class="sub">まだ診断記録がありません</div>';
 }
+/* 経年比較：年ごとの全景写真と診断値の推移 */
+const yr = ts => new Date(ts).getFullYear();
+async function wholeByYear(t) {
+  const ps = alive(await db.photosOf(t.uid)).filter(p => p.organ === "whole").sort((a, b) => a.at - b.at), by = {};
+  ps.forEach(p => by[yr(p.at)] = p);
+  return Object.keys(by).sort().map(y => by[y]);
+}
+function trendRows(t) {
+  const ds = alive(t.diags || []).sort((a, b) => a.at - b.at);
+  return ds.map((d, i) => { const p = ds[i - 1]; return { d, gDiff: p && d.g && p.g ? +d.g - +p.g : null }; });
+}
+async function drawCompare() {
+  const t = cur; if (!t) return;
+  const rows = trendRows(t), ws = await wholeByYear(t);
+  let html = rows.length > 1 ? `<table class="mx"><tr><th>診断日</th><th>判定</th><th>幹周</th><th>樹高</th><th>樹勢</th></tr>${rows.map(r => `<tr><td>${fmtD(r.d.at)}</td><td><span class="badge ${jcls(r.d)}">${r.d.judge || "-"}</span></td><td>${esc(r.d.g || "-")}${r.gDiff != null ? `<small>（${r.gDiff >= 0 ? "+" : ""}${r1(r.gDiff)}）</small>` : ""}</td><td>${esc(r.d.h || "-")}</td><td>${esc(r.d.vig || "")}</td></tr>`).join("")}</table>` : '<div class="sub">診断が2回以上になると、判定・幹周・樹高の推移を表示します。</div>';
+  html += ws.length > 1 ? `<div class="gal" style="margin-top:8px" id="cmpGal"></div>` : `<div class="sub">年の違う「全景」写真が2枚以上で、写真を並べて比較します。${ws.length ? "翌年は「前回と同じ構図で全景を撮る」を使ってください。" : ""}</div>`;
+  $("dCmp").innerHTML = html;
+  if (ws.length > 1) for (const p of ws.slice(-3)) {
+    const b = await photoBlob(p, "lab").catch(() => null); if (!b || cur !== t) continue;
+    const u = URL.createObjectURL(b); urls.push(u);
+    $("cmpGal").insertAdjacentHTML("beforeend", `<div style="text-align:center;font-size:12px"><img src="${u}" style="height:150px;border-radius:8px"><br>${yr(p.at)}年 ${fmtD(p.at).slice(5)}</div>`);
+  }
+}
+let ghostStream = null;
+async function openGhost() {
+  if (!cur) return;
+  const ws = alive(await db.photosOf(cur.uid)).filter(p => p.organ === "whole").sort((a, b) => b.at - a.at);
+  const prev = ws.find(p => Date.now() - p.at > 30 * 864e5) || ws[0];
+  if (!prev) { toast("前回の全景写真がありません。まず全景を撮ってください"); return; }
+  const b = await photoBlob(prev, "orig").catch(() => null) || await photoBlob(prev, "lab").catch(() => null);
+  if (!b) { toast("前回写真を読み込めません"); return; }
+  $("ghImg").src = URL.createObjectURL(b); $("ghInfo").textContent = `前回 ${fmtD(prev.at)} の全景を重ねています`;
+  try { ghostStream = camOK ? $("v").srcObject : await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } }, audio: false }); }
+  catch (e) { toast("カメラを開けません"); return; }
+  $("ghV").srcObject = ghostStream; $("ghost").classList.add("on");
+}
+function closeGhost() { $("ghost").classList.remove("on"); if (ghostStream && ghostStream !== $("v").srcObject) ghostStream.getTracks().forEach(t => t.stop()); ghostStream = null; URL.revokeObjectURL($("ghImg").src); }
 async function closeDetail() { $("detail").classList.remove("on"); freeUrls(); cur = null; refreshViews(); }
 async function saveCur() { await save("trees", cur); }
 
@@ -428,15 +505,17 @@ async function showViewer() {
 function closeViewer() { $("viewer").classList.remove("on"); if (vUrl) URL.revokeObjectURL(vUrl); vUrl = null; vPhoto = null; }
 
 /* ---------- 地図 ---------- */
+const LEGEND_HTML = `<div class="legend"><span class="j-A">A 健全</span><span class="j-B1">B1 注意</span><span class="j-B2">B2 要処置</span><span class="j-C">C 伐採推奨</span><span class="j-cut">伐採済</span><span class="j-none">未診断</span><span class="j-empty">空き桝</span></div>`;
 let map = null, layer = null, meMarker = null, fitted = false;
 function initMap() {
   if (map || !window.L) return;
   map = L.map("map").setView([35.681, 139.767], 12);
   const att = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>';
-  const std = L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", { maxNativeZoom: 18, maxZoom: 20, attribution: att }).addTo(map);
-  const photo = L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", { maxNativeZoom: 18, maxZoom: 20, attribution: att });
+  const std = L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", { maxNativeZoom: 18, maxZoom: 22, attribution: att }).addTo(map);
+  const photo = L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", { maxNativeZoom: 18, maxZoom: 22, attribution: att });
   L.control.layers({ "地図": std, "航空写真": photo }).addTo(map);
   layer = L.layerGroup().addTo(map);
+  const lg = L.control({ position: "bottomleft" }); lg.onAdd = () => { const d = L.DomUtil.create("div"); d.innerHTML = LEGEND_HTML; return d; }; lg.addTo(map);
 }
 async function listTrees() {
   const all = alive(await db.all("trees"));
@@ -449,7 +528,7 @@ async function drawMap(fit) {
   const ts = (await listTrees()).filter(t => t.lat != null);
   ts.forEach(t => {
     const d = latest(t);
-    mk[t.uid] = L.marker([t.lat, t.lng], { icon: L.divIcon({ className: "", html: `<div class="pin-b ${jcls(d)}">${t.no}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }) })
+    mk[t.uid] = L.marker([t.lat, t.lng], { icon: L.divIcon({ className: "", html: `<div class="pin-b ${tcls(t)}">${t.no}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }) })
       .bindPopup(`<b>${noStr(t.no)} ${esc(t.name || "樹種未確定")}</b><br>${d ? "判定 " + esc(d.judge || "-") + "（" + fmtD(d.at) + "）" : "未診断"}<br><button class="primary" onclick="openDetail('${t.uid}')">カルテを開く</button> <button onclick="startMove('${t.uid}')">位置を修正</button>`)
       .addTo(layer);
   });
@@ -482,14 +561,14 @@ async function drawList() {
   await ensureProject(); await drawProjSel();
   const q = $("q").value.trim().toLowerCase();
   let ts = (await listTrees()).sort((a, b) => a.no - b.no);
-  const cnt = { A: 0, B1: 0, B2: 0, C: 0, none: 0 };
-  ts.forEach(t => { const d = latest(t); cnt[d && d.judge ? d.judge : "none"]++; });
-  $("sum").innerHTML = `<span style="background:#333">計 ${ts.length}本</span>` + ["A", "B1", "B2", "C"].map(j => `<span class="j-${j}">${j} ${cnt[j]}</span>`).join("") + `<span class="j-none">未診断 ${cnt.none}</span>`;
+  const cnt = { A: 0, B1: 0, B2: 0, C: 0, none: 0, cut: 0, empty: 0 };
+  ts.forEach(t => { const d = latest(t); cnt[t.status === "cut" || t.status === "empty" ? t.status : d && d.judge ? d.judge : "none"]++; });
+  $("sum").innerHTML = `<span style="background:#333">計 ${ts.length}本</span>` + ["A", "B1", "B2", "C"].map(j => `<span class="j-${j}">${j} ${cnt[j]}</span>`).join("") + `<span class="j-none">未診断 ${cnt.none}</span><span class="j-cut">伐採済 ${cnt.cut}</span>` + (cnt.empty ? `<span class="j-empty">空き桝 ${cnt.empty}</span>` : "");
   const dup = {}; ts.forEach(t => { const k = t.project + "_" + t.no; dup[k] = (dup[k] || 0) + 1; });
   if (q) ts = ts.filter(t => { const d = latest(t); return [noStr(t.no), t.no, t.mgmtNo, t.name, t.sci, t.place, t.memo, d && d.judge].join(" ").toLowerCase().includes(q); });
   $("list").innerHTML = ts.map(t => {
     const d = latest(t), dp = dup[t.project + "_" + t.no] > 1;
-    return `<div class="card" data-id="${t.uid}"><img src="${t.thumb || ""}" alt=""><div><b>${noStr(t.no)}${dp ? " ⚠番号重複" : ""}　${esc(t.name || "樹種未確定")}</b><small>${esc([t.mgmtNo, t.place].filter(Boolean).join("　") || t.sci || "")}</small><small>${d ? fmtD(d.at) + "　" + esc(d.reason || findingsText(d) || "異常なし") : "未診断"}${t.lat == null ? "・位置なし" : ""}</small></div><span class="badge ${jcls(d)}">${d && d.judge ? d.judge : "未"}</span></div>`;
+    return `<div class="card" data-id="${t.uid}"><img src="${t.thumb || ""}" alt=""><div><b>${noStr(t.no)}${dp ? " ⚠番号重複" : ""}　${esc(t.name || "樹種未確定")}</b><small>${esc([t.mgmtNo, t.place].filter(Boolean).join("　") || t.sci || "")}</small><small>${d ? fmtD(d.at) + "　" + esc(d.reason || findingsText(d) || "異常なし") : "未診断"}${t.lat == null ? "・位置なし" : ""}</small></div><span class="badge ${tcls(t)}">${tlab(t)}</span></div>`;
   }).join("") || '<p class="empty">まだカルテがありません。<br>「判定」タブで樹種を出して「＋ カルテに登録」。</p>';
 }
 function refreshViews() { if ($("v-list").classList.contains("on")) drawList(); if ($("v-map").classList.contains("on")) drawMap(false); }
@@ -507,14 +586,14 @@ function staticMap(pts, w, h, zmax = 18) {
     const xs = ps.map(p => p.x), ys = ps.map(p => p.y);
     if (Math.max(...xs) - Math.min(...xs) <= w - 60 && Math.max(...ys) - Math.min(...ys) <= h - 60) break;
   }
-  const ps = pts.map(p => ({ ...lonlat2px(p.lng, p.lat, z), label: p.label }));
+  const ps = pts.map(p => ({ ...lonlat2px(p.lng, p.lat, z), label: p.label, cls: p.cls || "j-C" }));
   const cx = (Math.min(...ps.map(p => p.x)) + Math.max(...ps.map(p => p.x))) / 2, cy = (Math.min(...ps.map(p => p.y)) + Math.max(...ps.map(p => p.y))) / 2;
   const x0 = cx - w / 2, y0 = cy - h / 2;
   let html = `<div class="smap" style="width:${w}px;height:${h}px">`;
   for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + w) / 256); tx++)
     for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + h) / 256); ty++)
       html += `<img src="https://cyberjapandata.gsi.go.jp/xyz/std/${z}/${tx}/${ty}.png" style="left:${Math.round(tx * 256 - x0)}px;top:${Math.round(ty * 256 - y0)}px" alt="">`;
-  ps.forEach(p => html += `<div class="pin" style="left:${Math.round(p.x - x0)}px;top:${Math.round(p.y - y0)}px">${esc(p.label)}</div>`);
+  ps.forEach(p => html += `<div class="pin ${p.cls}" style="left:${Math.round(p.x - x0)}px;top:${Math.round(p.y - y0)}px">${esc(p.label)}</div>`);
   return html + `</div><div class="note">出典：地理院タイル（標準地図）</div>`;
 }
 function diagTable(d) {
@@ -542,14 +621,33 @@ async function photosHTML(t, max) {
   for (const p of pick) { try { const b = await photoBlob(p, "lab"); if (b) out.push(`<div class="ph"><img src="${await blobToData(b)}"></div>`); } catch (e) {} }
   return out.join("") || '<p class="note">写真なし</p>';
 }
+async function compareHTML(t) {
+  const ds = alive(t.diags || []).sort((a, b) => a.at - b.at);
+  const ws = await wholeByYear(t);
+  if (ds.length < 2 && ws.length < 2) return "";
+  let h = "<h3>前回との比較</h3>";
+  if (ds.length >= 2) {
+    const a = ds[ds.length - 2], b = ds[ds.length - 1];
+    const row = (k, x, y) => `<tr><th>${k}</th><td>${esc(x ?? "")}</td><td>${esc(y ?? "")}</td></tr>`;
+    h += `<table><tr><th>項目</th><th>前回 ${fmtD(a.at)}</th><th>今回 ${fmtD(b.at)}</th></tr>${row("総合判定", a.judge, b.judge)}${row("幹周(cm)", a.g, (b.g || "") + (a.g && b.g ? `（${+b.g - +a.g >= 0 ? "+" : ""}${r1(+b.g - +a.g)}）` : ""))}${row("樹高(m)", a.h, b.h)}${row("樹勢", a.vig, b.vig)}${row("判定理由", a.reason || findingsText(a), b.reason || findingsText(b))}</table>`;
+  }
+  if (ws.length >= 2) {
+    const out = [];
+    for (const p of ws.slice(-2)) { const b = await photoBlob(p, "lab").catch(() => null); if (b) out.push(`<div class="ph" style="width:49%"><img src="${await blobToData(b)}"><div class="note">${fmtD(p.at)}</div></div>`); }
+    h += out.join("");
+  }
+  return h;
+}
 async function sheetHTML(t, proj) {
   return `<div class="pg"><h2>樹木カルテ（個票）　${noStr(t.no)}${t.mgmtNo ? "　管理番号 " + esc(t.mgmtNo) : ""}</h2>
   <table><tr><th>樹種</th><td>${esc(t.name || "")}${t.sci ? "（" + esc(t.sci) + "）" : ""}</td><th>案件</th><td>${esc(proj ? proj.name : "")}</td></tr>
   <tr><th>所在</th><td colspan="3">${esc(t.place || "")}</td></tr>
   <tr><th>位置</th><td colspan="3">${posText(t.lat, t.lng, t.acc)}</td></tr></table>
+  ${t.status && t.status !== "live" ? `<p><b>状態：${STATUS[t.status]}</b>${t.statusAt ? "（" + esc(t.statusAt) + "）" : ""}</p>` : ""}
   ${diagTable(latest(t))}
-  <h3>写真</h3>${await photosHTML(t, 4)}
-  ${t.lat != null ? "<h3>位置図</h3>" + staticMap([{ lat: t.lat, lng: t.lng, label: t.no }], 480, 170) : ""}
+  ${await compareHTML(t)}
+  <h3>写真</h3>${await photosHTML(t, 3)}
+  ${t.lat != null ? "<h3>位置図</h3>" + staticMap([{ lat: t.lat, lng: t.lng, label: t.no, cls: tcls(t) }], 480, 170) : ""}
   ${t.memo ? `<h3>メモ</h3><p>${esc(t.memo)}</p>` : ""}</div>`;
 }
 async function doPrint(html) {
@@ -577,6 +675,7 @@ async function checkIssues() {
     if (!ps.some(p => p.organ === "whole")) is.push("全景写真なし");
     if (d && d.judge && d.judge !== "A" && !ps.some(p => p.organ !== "whole")) is.push("被害部写真なし");
     if (t.lat == null) is.push("位置なし");
+    else if (typeof t.acc === "number" && t.acc > 3) is.push(`位置の誤差±${t.acc}m（地図で補正）`);
     if (!t.name) is.push("樹種未確定");
     if (hasLedger && !t.mgmtNo) is.push("管理番号なし");
     if (nos[t.no] > 1) is.push("番号重複");
@@ -596,8 +695,8 @@ async function printReport() {
   const proj = curProj, ts = alive(await db.all("trees")).filter(t => t.project === proj.uid).sort((a, b) => a.no - b.no);
   if (!ts.length) { toast("この案件にカルテがありません"); return; }
   toast("報告書を作成中…", 6000);
-  const cnt = { A: 0, B1: 0, B2: 0, C: 0, none: 0 }, sp = {};
-  ts.forEach(t => { const d = latest(t); cnt[d && d.judge ? d.judge : "none"]++; const k = t.name || "樹種未確定"; sp[k] = (sp[k] || 0) + 1; });
+  const cnt = { A: 0, B1: 0, B2: 0, C: 0, none: 0, cut: 0, empty: 0 }, sp = {};
+  ts.forEach(t => { const d = latest(t); cnt[t.status === "cut" || t.status === "empty" ? t.status : d && d.judge ? d.judge : "none"]++; const k = t.name || "樹種未確定"; sp[k] = (sp[k] || 0) + 1; });
   const dates = ts.map(t => latest(t)).filter(Boolean).map(d => d.at);
   const period = proj.period || (dates.length ? `${fmtD(Math.min(...dates))} 〜 ${fmtD(Math.max(...dates))}` : "");
   const row = t => { const d = latest(t); return `<tr><td>${noStr(t.no)}</td><td>${esc(t.mgmtNo || "")}</td><td>${esc(t.name || "")}</td><td>${esc(t.place || "")}</td><td>${esc(d ? d.g || "" : "")}</td><td>${esc(d ? d.h || "" : "")}</td><td style="text-align:center"><b>${esc(d ? d.judge || "-" : "未")}</b></td><td>${esc(d ? d.reason || findingsText(d) : "")}</td><td>${esc(d ? (d.acts || []).join("・") : "")}</td></tr>`; };
@@ -608,11 +707,11 @@ async function printReport() {
   <tr><th>診断者</th><td>${esc(proj.inspector || "")}${proj.license ? "（樹木医 登録番号 " + esc(proj.license) + "）" : ""}</td></tr>
   <tr><th>調査期間</th><td>${esc(period)}</td></tr><tr><th>対象本数</th><td>${ts.length}本</td></tr><tr><th>作成日</th><td>${fmtD(Date.now())}</td></tr></table></div>`;
   html += `<div class="pg"><h2>1. 診断結果の総括</h2>${proj.intro ? `<p style="margin-bottom:8px">${esc(proj.intro)}</p>` : ""}
-  <table><tr><th>総合判定</th><th>内容</th><th>本数</th><th>対応の目安</th></tr>${["A", "B1", "B2", "C"].map(j => `<tr><td><b>${j}</b></td><td>${JUDGE[j].t}</td><td>${cnt[j]}</td><td>${JUDGE[j].next}</td></tr>`).join("")}<tr><td>-</td><td>未診断</td><td>${cnt.none}</td><td></td></tr><tr><th colspan="2">合計</th><th>${ts.length}</th><th></th></tr></table>
+  <table><tr><th>総合判定</th><th>内容</th><th>本数</th><th>対応の目安</th></tr>${["A", "B1", "B2", "C"].map(j => `<tr><td><b>${j}</b></td><td>${JUDGE[j].t}</td><td>${cnt[j]}</td><td>${JUDGE[j].next}</td></tr>`).join("")}<tr><td>-</td><td>未診断</td><td>${cnt.none}</td><td></td></tr>${cnt.cut ? `<tr><td>-</td><td>伐採済</td><td>${cnt.cut}</td><td></td></tr>` : ""}${cnt.empty ? `<tr><td>-</td><td>空き桝・欠損</td><td>${cnt.empty}</td><td></td></tr>` : ""}<tr><th colspan="2">合計</th><th>${ts.length}</th><th></th></tr></table>
   <p class="note">判定区分は東京都建設局「街路樹診断」の健全度区分（A・B1・B2・C）に準拠。発注者の様式に合わせて調整してください。</p>
   <h3>樹種別本数</h3><table><tr><th>樹種</th><th>本数</th></tr>${Object.entries(sp).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>
   <h3>処置が必要な樹木（B2・C）</h3>${bad.length ? `<table>${head}${bad.map(row).join("")}</table>` : "<p>該当なし</p>"}</div>`;
-  html += `<div class="pg"><h2>2. 位置図</h2>${staticMap(ts.filter(t => t.lat != null).map(t => ({ lat: t.lat, lng: t.lng, label: t.no })), 680, 860)}</div>`;
+  html += `<div class="pg"><h2>2. 位置図</h2>${staticMap(ts.filter(t => t.lat != null).map(t => ({ lat: t.lat, lng: t.lng, label: t.no, cls: tcls(t) })), 680, 820)}${LEGEND_HTML}</div>`;
   html += `<div class="pg"><h2>3. 診断結果一覧表</h2><table style="font-size:8.5pt">${head}${ts.map(row).join("")}</table></div>`;
   for (const t of ts) html += await sheetHTML(t, proj);
   await doPrint(html);
@@ -750,7 +849,7 @@ async function sync(quiet) {
 /* ---------- 設定 ---------- */
 async function openSettings() {
   $("key").value = store.get("pn_key"); $("demo").checked = store.get("pn_demo") === "1";
-  $("gasUrl").value = store.get("gas_url"); $("gasToken").value = store.get("gas_token"); $("sendOrig").checked = store.get("send_orig") === "1";
+  $("posSec").value = store.get("pos_sec") || "10"; $("gasUrl").value = store.get("gas_url"); $("gasToken").value = store.get("gas_token"); $("sendOrig").checked = store.get("send_orig") === "1";
   const u = userDict(); $("udict").value = Object.keys(u).map(k => `${k},${u[k]}`).join("\n");
   const ts = alive(await db.all("trees")), ps = alive(await db.all("photos"));
   let est = ""; try { const e = await navigator.storage.estimate(); est = `／端末使用量 約${(e.usage / 1048576).toFixed(1)}MB`; } catch (e) {}
@@ -759,7 +858,7 @@ async function openSettings() {
 }
 function saveSettings() {
   store.set("pn_key", $("key").value.trim()); store.set("pn_demo", $("demo").checked ? "1" : "0");
-  store.set("gas_url", $("gasUrl").value.trim()); store.set("gas_token", $("gasToken").value.trim()); store.set("send_orig", $("sendOrig").checked ? "1" : "0");
+  store.set("pos_sec", $("posSec").value); store.set("gas_url", $("gasUrl").value.trim()); store.set("gas_token", $("gasToken").value.trim()); store.set("send_orig", $("sendOrig").checked ? "1" : "0");
   const d = {};
   $("udict").value.split(/\r?\n/).forEach(l => { const m = l.split(/[,，\t]/); if (m.length >= 2 && m[0].trim() && m[1].trim()) d[m[0].trim()] = m[1].trim(); });
   setUserDict(d); $("dlg").classList.remove("on"); toast("保存しました");
@@ -800,8 +899,12 @@ $("projSel").onchange = async () => {
 $("projEdit").onclick = async () => { await ensureProject(); openProj(curProj); };
 $("pClose").onclick = () => $("proj").classList.remove("on");
 $("pSave").onclick = async () => {
-  Object.assign(curProj, { name: $("pName").value.trim() || "無題の案件", title: $("pTitle").value.trim(), client: $("pClient").value.trim(), contractor: $("pContractor").value.trim(), inspector: $("pInspector").value.trim(), license: $("pLicense").value.trim(), period: $("pPeriod").value.trim(), intro: $("pIntro").value.trim() });
-  delete curProj.auto; await save("projects", curProj); $("proj").classList.remove("on"); toast("案件を保存しました"); await ensureProject(); drawList();
+  const wasPub = curProj.public;
+  Object.assign(curProj, { name: $("pName").value.trim() || "無題の案件", title: $("pTitle").value.trim(), client: $("pClient").value.trim(), contractor: $("pContractor").value.trim(), inspector: $("pInspector").value.trim(), license: $("pLicense").value.trim(), period: $("pPeriod").value.trim(), intro: $("pIntro").value.trim(), public: $("pPublic").checked });
+  if (curProj.public && !curProj.shareKey) curProj.shareKey = uid().replace(/-/g, "");
+  delete curProj.auto; await save("projects", curProj); toast("案件を保存しました");
+  if (curProj.public && !wasPub) { drawShare(curProj); sync(true); return; }
+  $("proj").classList.remove("on"); await ensureProject(); drawList();
 };
 $("pNew").onclick = async () => {
   const name = prompt("新しい案件名", "");
@@ -830,6 +933,25 @@ $("dDict").onclick = () => {
   const d = userDict(); d[cur.sci] = v; setUserDict(d); toast(`辞書に登録：${cur.sci} → ${v}`);
 };
 $("dAddPhoto").onclick = () => $("addFile").click();
+$("dGhost").onclick = openGhost;
+$("ghClose").onclick = closeGhost;
+$("ghOp").oninput = () => $("ghImg").style.opacity = $("ghOp").value;
+$("ghShot").onclick = async () => {
+  const v = $("ghV"); if (!v.videoWidth || !cur) return;
+  const blob = await toBlob(canvasOf(v, v.videoWidth, v.videoHeight, 2048), .9);
+  closeGhost(); toast("保存中…");
+  const pos = await getPos();
+  await addPhotoTo(cur, blob, { at: Date.now(), pos, organ: "whole", score: null });
+  await drawPhotos(); drawCompare(); toast("全景写真を追加しました");
+};
+$("dStatus").onchange = async () => {
+  const v = $("dStatus").value;
+  if (v !== "live" && !$("dStatusAt").value) $("dStatusAt").value = fmtD(Date.now());
+  cur.statusAt = $("dStatusAt").value; await treeField("status", v, false);
+};
+$("dStatusAt").onchange = () => treeField("statusAt", $("dStatusAt").value, false);
+$("pPublic").onchange = () => { if ($("pPublic").checked && !confirm("この案件の地図（番号・樹種・判定・所在・位置・サムネイル写真）を、リンクを知っている人が見られるようにします。発注者の了承を得ていますか？")) $("pPublic").checked = false; };
+$("pCopy").onclick = async () => { const u = shareUrl(curProj); if (!u) return; try { await navigator.clipboard.writeText(u); toast("リンクをコピーしました"); } catch (e) { prompt("このリンクをコピーしてください", u); } };
 $("addFile").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f || !cur) return;
   toast("保存中…");
@@ -839,8 +961,8 @@ $("addFile").onchange = async e => {
 };
 $("dPosUpd").onclick = async () => {
   if (!cur) return; toast("現在地を取得中…");
-  const p = await getPos(); if (!p) { toast("現在地を取得できません"); return; }
-  if (!confirm(`位置を現在地（誤差±${p.acc}m）に更新しますか？`)) return;
+  const p = await getPosAvg(Math.max(10, +(store.get("pos_sec") || 10))); if (!p) { toast("現在地を取得できません"); return; }
+  if (!confirm(`位置を現在地（誤差±${p.acc}m・${p.n || 1}回測位）に更新しますか？${p.acc > 3 ? "\n\n誤差が大きいため、更新後に「地図で補正」を推奨します。" : ""}`)) return;
   cur.lat = p.lat; cur.lng = p.lng; cur.acc = p.acc; await saveCur();
   $("dPos").textContent = posText(cur.lat, cur.lng, cur.acc); toast("位置を更新しました");
 };
@@ -874,12 +996,12 @@ $("gSave").onclick = async () => {
   if (!d.judge && !confirm("総合判定が未選択です。このまま保存しますか？")) return;
   if (!d.reason) d.reason = findingsText(d);
   cur.diags = (cur.diags || []).filter(x => x.id !== d.id).concat(d);
-  await saveCur(); fillForm(null); drawHist(); toast("診断を保存しました");
+  await saveCur(); fillForm(null); drawHist(); drawCompare(); toast("診断を保存しました");
 };
 $("dHist").onclick = async e => {
   const ed = e.target.closest("button[data-ed]"), rm = e.target.closest("button[data-rm]");
   if (ed) { fillForm(cur.diags.find(x => x.id === ed.dataset.ed)); $("gAt").scrollIntoView({ behavior: "smooth", block: "center" }); }
-  if (rm && confirm("この診断記録を削除しますか？")) { const x = cur.diags.find(x => x.id === rm.dataset.rm); x.deleted = true; await saveCur(); drawHist(); if (editingId === x.id) fillForm(null); }
+  if (rm && confirm("この診断記録を削除しますか？")) { const x = cur.diags.find(x => x.id === rm.dataset.rm); x.deleted = true; await saveCur(); drawHist(); drawCompare(); if (editingId === x.id) fillForm(null); }
 };
 $("dDel").onclick = async () => {
   if (!cur || !confirm(`${noStr(cur.no)}（${cur.name || "樹種未確定"}）のカルテと写真を削除します。よろしいですか？`)) return;
