@@ -594,7 +594,7 @@ function staticMap(pts, w, h, zmax = 18) {
     for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + h) / 256); ty++)
       html += `<img src="https://cyberjapandata.gsi.go.jp/xyz/std/${z}/${tx}/${ty}.png" style="left:${Math.round(tx * 256 - x0)}px;top:${Math.round(ty * 256 - y0)}px" alt="">`;
   ps.forEach(p => html += `<div class="pin ${p.cls}" style="left:${Math.round(p.x - x0)}px;top:${Math.round(p.y - y0)}px">${esc(p.label)}</div>`);
-  return html + `</div><div class="note">出典：地理院タイル（標準地図）</div>`;
+  return html + `<div style="position:absolute;right:2px;bottom:1px;font-size:7pt;background:rgba(255,255,255,.8);padding:0 3px">出典：地理院タイル</div></div>`;
 }
 function diagTable(d) {
   if (!d) return "<p>診断記録なし</p>";
@@ -615,7 +615,8 @@ function diagTable(d) {
   <tr><th>所見</th><td>${esc(d.note || "")}</td></tr></table>`;
 }
 async function photosHTML(t, max) {
-  const ps = alive(await db.photosOf(t.uid)).sort((a, b) => a.at - b.at);
+  const ws = await wholeByYear(t), skip = new Set(ws.length >= 2 ? ws.slice(-2).map(p => p.uid) : []);
+  const ps = alive(await db.photosOf(t.uid)).filter(p => !skip.has(p.uid)).sort((a, b) => a.at - b.at);
   const pick = [...ps.filter(p => p.organ === "whole"), ...ps.filter(p => p.organ !== "whole")].slice(0, max);
   const out = [];
   for (const p of pick) { try { const b = await photoBlob(p, "lab"); if (b) out.push(`<div class="ph"><img src="${await blobToData(b)}"></div>`); } catch (e) {} }
@@ -625,18 +626,18 @@ async function compareHTML(t) {
   const ds = alive(t.diags || []).sort((a, b) => a.at - b.at);
   const ws = await wholeByYear(t);
   if (ds.length < 2 && ws.length < 2) return "";
-  let h = "<h3>前回との比較</h3>";
+  let h = "", ph = "";
   if (ds.length >= 2) {
     const a = ds[ds.length - 2], b = ds[ds.length - 1];
-    const row = (k, x, y) => `<tr><th>${k}</th><td>${esc(x ?? "")}</td><td>${esc(y ?? "")}</td></tr>`;
-    h += `<table><tr><th>項目</th><th>前回 ${fmtD(a.at)}</th><th>今回 ${fmtD(b.at)}</th></tr>${row("総合判定", a.judge, b.judge)}${row("幹周(cm)", a.g, (b.g || "") + (a.g && b.g ? `（${+b.g - +a.g >= 0 ? "+" : ""}${r1(+b.g - +a.g)}）` : ""))}${row("樹高(m)", a.h, b.h)}${row("樹勢", a.vig, b.vig)}${row("判定理由", a.reason || findingsText(a), b.reason || findingsText(b))}</table>`;
+    const row = (k, x, y) => `<tr><th style="white-space:nowrap">${k}</th><td>${esc(x ?? "")}</td><td>${esc(y ?? "")}</td></tr>`;
+    h = `<table><tr><th>項目</th><th>前回 ${fmtD(a.at)}</th><th>今回 ${fmtD(b.at)}</th></tr>${row("総合判定", a.judge, b.judge)}${row("幹周(cm)", a.g, (b.g || "") + (a.g && b.g ? `（${+b.g - +a.g >= 0 ? "+" : ""}${r1(+b.g - +a.g)}）` : ""))}${row("樹高(m)", a.h, b.h)}${row("樹勢", a.vig, b.vig)}${row("判定理由", a.reason || findingsText(a), b.reason || findingsText(b))}</table>`;
   }
   if (ws.length >= 2) {
     const out = [];
-    for (const p of ws.slice(-2)) { const b = await photoBlob(p, "lab").catch(() => null); if (b) out.push(`<div class="ph" style="width:49%"><img src="${await blobToData(b)}"><div class="note">${fmtD(p.at)}</div></div>`); }
-    h += out.join("");
+    for (const p of ws.slice(-2)) { const b = await photoBlob(p, "lab").catch(() => null); if (b) out.push(`<div class="ph" style="width:48%"><img src="${await blobToData(b)}"><div class="note">${fmtD(p.at)}（${p === ws[ws.length - 1] ? "今回" : "前回"}）</div></div>`); }
+    ph = out.join("");
   }
-  return h;
+  return `<h3>前回との比較</h3><table style="border:0;margin:0"><tr><td style="border:0;padding:0;width:${ph ? "58%" : "100%"}">${h}</td>${ph ? `<td style="border:0;padding:0 0 0 6px" class="cmpph">${ph}</td>` : ""}</tr></table>`;
 }
 async function sheetHTML(t, proj) {
   return `<div class="pg"><h2>樹木カルテ（個票）　${noStr(t.no)}${t.mgmtNo ? "　管理番号 " + esc(t.mgmtNo) : ""}</h2>
@@ -646,8 +647,8 @@ async function sheetHTML(t, proj) {
   ${t.status && t.status !== "live" ? `<p><b>状態：${STATUS[t.status]}</b>${t.statusAt ? "（" + esc(t.statusAt) + "）" : ""}</p>` : ""}
   ${diagTable(latest(t))}
   ${await compareHTML(t)}
-  <h3>写真</h3>${await photosHTML(t, 3)}
-  ${t.lat != null ? "<h3>位置図</h3>" + staticMap([{ lat: t.lat, lng: t.lng, label: t.no, cls: tcls(t) }], 480, 170) : ""}
+  ${await (async () => { const h = await photosHTML(t, 3); return h.includes("写真なし") && (await wholeByYear(t)).length >= 2 ? "" : "<h3>写真</h3>" + h; })()}
+  ${t.lat != null ? "<h3>位置図</h3>" + staticMap([{ lat: t.lat, lng: t.lng, label: t.no, cls: tcls(t) }], 520, 110) : ""}
   ${t.memo ? `<h3>メモ</h3><p>${esc(t.memo)}</p>` : ""}</div>`;
 }
 async function doPrint(html) {
