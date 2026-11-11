@@ -243,7 +243,25 @@ async function startCam() {
   try { $("v").srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } }, audio: false }); camOK = true; }
   catch (e) { noCam("カメラを開けません（PCや許可設定を確認）"); }
 }
-async function frameBlob() { const v = $("v"); if (!v.videoWidth) throw new Error("映像の準備中です"); return toBlob(canvasOf(v, v.videoWidth, v.videoHeight, 2048), .9); }
+async function frameBlob() {
+  const v = $("v"); if (!v.videoWidth) throw new Error("映像の準備中です");
+  // 画面の枠（レティクル）内だけを切り抜いて送る。object-fit:cover の表示と元映像の対応から枠の範囲を逆算する
+  const W = v.clientWidth, H = v.clientHeight, w = v.videoWidth, h = v.videoHeight;
+  if (W && H) {
+    const s = Math.max(W / w, H / h), ox = (W - w * s) / 2, oy = (H - h * s) / 2;
+    const size = 0.52 * Math.min(W, H), cx = W / 2, cy = 0.34 * H;
+    let sx = (cx - size / 2 - ox) / s, sy = (cy - size / 2 - oy) / s, sw = size / s, sh = size / s;
+    sx = Math.max(0, Math.min(sx, w - 1)); sy = Math.max(0, Math.min(sy, h - 1));
+    sw = Math.min(sw, w - sx); sh = Math.min(sh, h - sy);
+    if (sw > 50 && sh > 50) {
+      const k = Math.min(1, 1600 / Math.max(sw, sh)), c = document.createElement("canvas");
+      c.width = Math.round(sw * k); c.height = Math.round(sh * k);
+      c.getContext("2d").drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      return toBlob(c, .9);
+    }
+  }
+  return toBlob(canvasOf(v, v.videoWidth, v.videoHeight, 2048), .9);
+}
 async function identify(blob) {
   const key = store.get("pn_key");
   if (!key) {
