@@ -254,10 +254,10 @@ async function frameBlob() {
     sx = Math.max(0, Math.min(sx, w - 1)); sy = Math.max(0, Math.min(sy, h - 1));
     sw = Math.min(sw, w - sx); sh = Math.min(sh, h - sy);
     if (sw > 50 && sh > 50) {
-      const k = Math.min(1, 1600 / Math.max(sw, sh)), c = document.createElement("canvas");
+      const k = Math.min(1, 1280 / Math.max(sw, sh)), c = document.createElement("canvas");
       c.width = Math.round(sw * k); c.height = Math.round(sh * k);
       c.getContext("2d").drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
-      return toBlob(c, .9);
+      const b = await toBlob(c, .9); b._pnReady = true; return b;
     }
   }
   return toBlob(canvasOf(v, v.videoWidth, v.videoHeight, 2048), .9);
@@ -269,7 +269,8 @@ async function identify(shots) {
     throw new Error("NOKEY");
   }
   const fd = new FormData();
-  for (const sh of shots) { fd.append("images", await resizeBlob(sh.blob, 1280), "photo.jpg"); fd.append("organs", sh.organ); }
+  const maxDim = shots.length > 1 ? 1024 : 1280;
+  for (const sh of shots) { fd.append("images", sh.blob._pnReady ? sh.blob : await resizeBlob(sh.blob, maxDim), "photo.jpg"); fd.append("organs", sh.organ); }
   const r = await fetch("https://my-api.plantnet.org/v2/identify/all?include-related-images=false&nb-results=5&lang=ja&api-key=" + encodeURIComponent(key), { method: "POST", body: fd });
   if (!r.ok) {
     if (r.status === 401) throw new Error("キーが無効です（private keyか確認）");
@@ -289,7 +290,7 @@ function renderCands() {
 }
 let shots = [], adding = false;
 async function run(getBlob) {
-  if (busy) return; busy = true; $("shot").disabled = true; $("shot").textContent = "判定中…";
+  if (busy) return; busy = true; const runT0 = Date.now(); $("shot").disabled = true; $("shot").textContent = "判定中…";
   try {
     const blob = await getBlob();
     if (adding && shots.length) shots.push({ blob, organ: $("organ").value }); else shots = [{ blob, organ: $("organ").value }];
@@ -302,7 +303,7 @@ async function run(getBlob) {
       renderCands(); $("reg").disabled = false; $("reg").classList.add("primary");
       $("addShot").style.display = shots.length < 3 ? "" : "none";
       $("addShot").textContent = `＋ 別の部位を追加して再判定（現在${shots.length}枚）`;
-      msg(shots.length > 1 ? `${shots.length}枚（${shots.map(x => ORGAN_JA[x.organ] || x.organ).join("＋")}）でまとめて判定しました。` : (list[0].score < .4 ? "確信度が低め。「別の部位を追加」で葉＋樹皮のように送ると改善します。" : "候補をタップで選び直し → 「カルテに登録」"));
+      msg((shots.length > 1 ? `${shots.length}枚（${shots.map(x => ORGAN_JA[x.organ] || x.organ).join("＋")}）でまとめて判定しました。` : (list[0].score < .4 ? "確信度が低め。「別の部位を追加」で葉＋樹皮のように送ると改善します。" : "候補をタップで選び直し → 「カルテに登録」")) + `（${((Date.now() - runT0) / 1000).toFixed(1)}秒）`);
       const L = last;
       await Promise.all(list.map(async x => { const jp = (x.names || []).find(n => JA_RE.test(n)); x.ja = jp || await toJa(x.sci); }));
       if (L === last) renderCands();
@@ -362,8 +363,8 @@ async function register(blob, info) {
       lat: pos ? pos.lat : null, lng: pos ? pos.lng : null, acc: pos ? pos.acc : null,
       createdAt: info.at, diags: [], memo: "", thumb: null
     };
-    if (pos) { const pl = await reverseGeocode(pos.lat, pos.lng); if (pl) t.place = pl; }
     await save("trees", t);
+    if (pos) reverseGeocode(pos.lat, pos.lng).then(async pl => { if (pl && !t.place) { t.place = pl; await save("trees", t); if (cur && cur.uid === t.uid) { cur.place = pl; const dp = $("dPlace"); if (dp) dp.value = pl; } persistOnce(); } }).catch(() => {});
     if (blob) await addPhotoTo(t, blob, { at: info.at, pos, organ: info.organ, score: info.score });
     persistOnce(); msg(""); toast(`${noStr(t.no)} で登録しました`);
     openDetail(t.uid);
