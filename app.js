@@ -203,7 +203,7 @@ const dataToBlob = async d => (await fetch(d)).blob();
 
 /* ---------- 写真のラベル貼り（焼き込み） ---------- */
 function labelLines(t, p) {
-  const l1 = `${noStr(t.no)}${t.mgmtNo ? "（" + t.mgmtNo + "）" : ""}  ${t.name || "樹種未確定"}` + (p.score != null ? `  AI${Math.round(p.score * 100)}%` : "");
+  const l1 = `${noStr(t.no)}${t.name || "樹種未確定"}` + (p.score != null ? `  AI${Math.round(p.score * 100)}%` : "");
   const l2 = `${fmt(p.at)}   ${posText(p.lat, p.lng, p.acc)}`;
   const l3 = `部位：${ORGAN_JA[p.organ] || p.organ || "-"}` + (t.place ? `   ${t.place}` : "");
   return [l1, l2, l3];
@@ -313,6 +313,22 @@ async function nextNo(projUid) {
   const ts = alive(await db.all("trees")).filter(t => t.project === projUid);
   return Math.max(0, ...ts.map(t => +t.no || 0)) + 1;
 }
+const PREF = { "01": "北海道", "02": "青森県", "03": "岩手県", "04": "宮城県", "05": "秋田県", "06": "山形県", "07": "福島県", "08": "茨城県", "09": "栃木県", "10": "群馬県", "11": "埼玉県", "12": "千葉県", "13": "東京都", "14": "神奈川県", "15": "新潟県", "16": "富山県", "17": "石川県", "18": "福井県", "19": "山梨県", "20": "長野県", "21": "岐阜県", "22": "静岡県", "23": "愛知県", "24": "三重県", "25": "滋賀県", "26": "京都府", "27": "大阪府", "28": "兵庫県", "29": "奈良県", "30": "和歌山県", "31": "鳥取県", "32": "島根県", "33": "岡山県", "34": "広島県", "35": "山口県", "36": "徳島県", "37": "香川県", "38": "愛媛県", "39": "高知県", "40": "福岡県", "41": "佐賀県", "42": "長崎県", "43": "熊本県", "44": "大分県", "45": "宮崎県", "46": "鹿児島県", "47": "沖縄県" };
+async function fetchT(url, ms) { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); try { return await fetch(url, { signal: c.signal }); } finally { clearTimeout(t); } }
+async function reverseGeocode(lat, lng) {
+  try {
+    const r = await fetchT(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lng}`, 6000);
+    const j = await r.json(), res = j && j.results; if (!res || !res.muniCd) return "";
+    let city = "";
+    try {
+      if (!window._muniMap) { const tx = await (await fetchT("https://maps.gsi.go.jp/js/muni.js", 6000)).text(); const map = {}; tx.replace(/GSI\.MUNI_ARRAY\["(\d+)"\]\s*=\s*'([^']+)'/g, (m, k, v) => { map[k] = v; return m; }); window._muniMap = map; }
+      const raw = window._muniMap[res.muniCd] || window._muniMap[String(parseInt(res.muniCd, 10))] || "";
+      if (raw) { const p = raw.split(","); city = (p[1] || "") + (p[3] || ""); }
+    } catch (e) { /* 市区町村名が取れない場合は都道府県＋町名で代替 */ }
+    if (!city) city = PREF[String(res.muniCd).slice(0, 2)] || "";
+    return city + (res.lv01Nm || "");
+  } catch (e) { return ""; }
+}
 async function register(blob, info) {
   $("reg").disabled = true; $("manual").disabled = true; msg("位置を取得中…");
   try {
@@ -330,7 +346,7 @@ async function register(blob, info) {
         if (pick) {
           if (!pick.name && info.name) { pick.name = info.name; pick.sci = info.sci; pick.fam = info.fam; pick.ai = info.ai; await save("trees", pick); }
           if (blob) await addPhotoTo(pick, blob, { at: info.at, pos, organ: info.organ, score: info.score });
-          toast(`${noStr(pick.no)}${pick.mgmtNo ? "（" + pick.mgmtNo + "）" : ""} に記録します`); openDetail(pick.uid); return;
+          toast(`${noStr(pick.no)} に記録します`); openDetail(pick.uid); return;
         }
       }
     }
@@ -340,6 +356,7 @@ async function register(blob, info) {
       lat: pos ? pos.lat : null, lng: pos ? pos.lng : null, acc: pos ? pos.acc : null,
       createdAt: info.at, diags: [], memo: "", thumb: null
     };
+    if (pos) { const pl = await reverseGeocode(pos.lat, pos.lng); if (pl) t.place = pl; }
     await save("trees", t);
     if (blob) await addPhotoTo(t, blob, { at: info.at, pos, organ: info.organ, score: info.score });
     persistOnce(); msg(""); toast(`${noStr(t.no)} で登録しました`);
@@ -349,7 +366,7 @@ async function register(blob, info) {
 }
 function chooseNear(cands, hasPhoto) {
   return new Promise(res => {
-    $("nearList").innerHTML = cands.map((x, i) => { const d = latest(x.t); return `<button data-i="${i}" class="card" style="width:100%;text-align:left"><div><b>${noStr(x.t.no)}${x.t.mgmtNo ? "　" + esc(x.t.mgmtNo) : ""}　${esc(x.t.name || "樹種未確定")}</b><small>約${Math.round(x.d)}m　${esc(x.t.place || "")}</small></div><span class="badge ${tcls(x.t)}">${tlab(x.t)}</span></button>`; }).join("");
+    $("nearList").innerHTML = cands.map((x, i) => { const d = latest(x.t); return `<button data-i="${i}" class="card" style="width:100%;text-align:left"><div><b>${noStr(x.t.no)}${esc(x.t.name || "樹種未確定")}</b><small>約${Math.round(x.d)}m　${esc(x.t.place || "")}</small></div><span class="badge ${tcls(x.t)}">${tlab(x.t)}</span></button>`; }).join("");
     $("nearHint").textContent = hasPhoto ? "この写真をどの木に記録しますか？" : "どの木を記録しますか？";
     $("near").classList.add("on");
     const done = v => { $("near").classList.remove("on"); $("nearList").onclick = $("nearNew").onclick = $("nearCancel").onclick = null; res(v); };
@@ -389,7 +406,7 @@ function fillForm(d) {
   const prev = latest(cur);
   d = d || {};
   $("gAt").value = toLocalInput(d.at || Date.now());
-  $("gBy").value = d.by ?? (prev && prev.by) ?? (curProjOf(cur) || {}).inspector ?? "";
+  $("gBy").value = d.by ?? (prev && prev.by) ?? (curProjOf(cur) || {}).inspector ?? "甲斐";
   const lg = cur.ledger || {};
   $("gH").value = d.h ?? (prev ? prev.h : lg.h) ?? ""; $("gG").value = d.g ?? (prev ? prev.g : lg.g) ?? ""; $("gS").value = d.s ?? (prev ? prev.s : "") ?? "";
   $("gVig").value = d.vig || "良好"; $("gDead").value = d.dead || "なし";
@@ -435,7 +452,7 @@ async function openDetail(id) {
   const t = await db.get("trees", id); if (!t || t.deleted) return;
   cur = t; cur._proj = await db.get("projects", t.project);
   $("dNo").textContent = noStr(t.no) + (cur._proj ? "　" + cur._proj.name : "");
-  $("dNum").value = t.no; $("dMg").value = t.mgmtNo || ""; $("dName").value = t.name || ""; $("dPlace").value = t.place || "";
+  $("dNum").value = t.no; $("dName").value = t.name || ""; $("dPlace").value = t.place || "";
   $("dSci").textContent = (t.sci ? t.sci + (t.fam ? "（" + t.fam + "）" : "") : "学名なし") + "　登録 " + fmt(t.createdAt) + (t.ai && t.ai.cands ? "　AI候補：" + t.ai.cands.map(x => `${x.n} ${Math.round(x.s * 100)}%`).join(" / ") : "");
   $("dPos").textContent = posText(t.lat, t.lng, t.acc);
   $("dMemo").value = t.memo || "";
@@ -583,10 +600,10 @@ async function drawList() {
   ts.forEach(t => { const d = latest(t); cnt[t.status === "cut" || t.status === "empty" ? t.status : d && d.judge ? d.judge : "none"]++; });
   $("sum").innerHTML = `<span style="background:#333">計 ${ts.length}本</span>` + ["A", "B1", "B2", "C"].map(j => `<span class="j-${j}">${j} ${cnt[j]}</span>`).join("") + `<span class="j-none">未診断 ${cnt.none}</span><span class="j-cut">伐採済 ${cnt.cut}</span>` + (cnt.empty ? `<span class="j-empty">空き桝 ${cnt.empty}</span>` : "");
   const dup = {}; ts.forEach(t => { const k = t.project + "_" + t.no; dup[k] = (dup[k] || 0) + 1; });
-  if (q) ts = ts.filter(t => { const d = latest(t); return [noStr(t.no), t.no, t.mgmtNo, t.name, t.sci, t.place, t.memo, d && d.judge].join(" ").toLowerCase().includes(q); });
+  if (q) ts = ts.filter(t => { const d = latest(t); return [noStr(t.no), t.no, t.name, t.sci, t.place, t.memo, d && d.judge].join(" ").toLowerCase().includes(q); });
   $("list").innerHTML = ts.map(t => {
     const d = latest(t), dp = dup[t.project + "_" + t.no] > 1;
-    return `<div class="card" data-id="${t.uid}"><img src="${t.thumb || ""}" alt=""><div><b>${noStr(t.no)}${dp ? " ⚠番号重複" : ""}　${esc(t.name || "樹種未確定")}</b><small>${esc([t.mgmtNo, t.place].filter(Boolean).join("　") || t.sci || "")}</small><small>${d ? fmtD(d.at) + "　" + esc(d.reason || findingsText(d) || "異常なし") : "未診断"}${t.lat == null ? "・位置なし" : ""}</small></div><span class="badge ${tcls(t)}">${tlab(t)}</span></div>`;
+    return `<div class="card" data-id="${t.uid}"><img src="${t.thumb || ""}" alt=""><div><b>${noStr(t.no)}${dp ? " ⚠番号重複" : ""}　${esc(t.name || "樹種未確定")}</b><small>${esc(t.place || t.sci || "")}</small><small>${d ? fmtD(d.at) + "　" + esc(d.reason || findingsText(d) || "異常なし") : "未診断"}${t.lat == null ? "・位置なし" : ""}</small></div><span class="badge ${tcls(t)}">${tlab(t)}</span></div>`;
   }).join("") || '<p class="empty">まだカルテがありません。<br>「判定」タブで樹種を出して「＋ カルテに登録」。</p>';
 }
 function refreshViews() { if ($("v-list").classList.contains("on")) drawList(); if ($("v-map").classList.contains("on")) drawMap(false); }
@@ -658,7 +675,7 @@ async function compareHTML(t) {
   return `<h3>前回との比較</h3><table style="border:0;margin:0"><tr><td style="border:0;padding:0;width:${ph ? "58%" : "100%"}">${h}</td>${ph ? `<td style="border:0;padding:0 0 0 6px" class="cmpph">${ph}</td>` : ""}</tr></table>`;
 }
 async function sheetHTML(t, proj) {
-  return `<div class="pg"><h2>樹木カルテ（個票）　${noStr(t.no)}${t.mgmtNo ? "　管理番号 " + esc(t.mgmtNo) : ""}</h2>
+  return `<div class="pg"><h2>樹木カルテ（個票）　${noStr(t.no)}</h2>
   <table><tr><th>樹種</th><td>${esc(t.name || "")}${t.sci ? "（" + esc(t.sci) + "）" : ""}</td><th>案件</th><td>${esc(proj ? proj.name : "")}</td></tr>
   <tr><th>所在</th><td colspan="3">${esc(t.place || "")}</td></tr>
   <tr><th>位置</th><td colspan="3">${posText(t.lat, t.lng, t.acc)}</td></tr></table>
@@ -696,7 +713,6 @@ async function checkIssues() {
     if (t.lat == null) is.push("位置なし");
     else if (typeof t.acc === "number" && t.acc > 3) is.push(`位置の誤差±${t.acc}m（地図で補正）`);
     if (!t.name) is.push("樹種未確定");
-    if (hasLedger && !t.mgmtNo) is.push("管理番号なし");
     if (nos[t.no] > 1) is.push("番号重複");
     if (is.length) out.push({ t, is });
   }
@@ -705,7 +721,7 @@ async function checkIssues() {
 async function showCheck() {
   const { ts, out } = await checkIssues();
   $("chkSum").textContent = `${curProj.name}：${ts.length}本中 ${out.length}本に要確認項目`;
-  $("chkList").innerHTML = out.length ? out.map(x => `<div class="card" data-id="${x.t.uid}"><div><b>${noStr(x.t.no)}${x.t.mgmtNo ? "　" + esc(x.t.mgmtNo) : ""}　${esc(x.t.name || "樹種未確定")}</b><small style="color:#ffb35c;white-space:normal">${x.is.join("・")}</small></div></div>`).join("") : '<p class="empty">漏れはありません。報告書を作成できます。</p>';
+  $("chkList").innerHTML = out.length ? out.map(x => `<div class="card" data-id="${x.t.uid}"><div><b>${noStr(x.t.no)}${esc(x.t.name || "樹種未確定")}</b><small style="color:#ffb35c;white-space:normal">${x.is.join("・")}</small></div></div>`).join("") : '<p class="empty">漏れはありません。報告書を作成できます。</p>';
   $("check").classList.add("on");
 }
 async function printReport() {
@@ -718,8 +734,8 @@ async function printReport() {
   ts.forEach(t => { const d = latest(t); cnt[t.status === "cut" || t.status === "empty" ? t.status : d && d.judge ? d.judge : "none"]++; const k = t.name || "樹種未確定"; sp[k] = (sp[k] || 0) + 1; });
   const dates = ts.map(t => latest(t)).filter(Boolean).map(d => d.at);
   const period = proj.period || (dates.length ? `${fmtD(Math.min(...dates))} 〜 ${fmtD(Math.max(...dates))}` : "");
-  const row = t => { const d = latest(t); return `<tr><td>${noStr(t.no)}</td><td>${esc(t.mgmtNo || "")}</td><td>${esc(t.name || "")}</td><td>${esc(t.place || "")}</td><td>${esc(d ? d.g || "" : "")}</td><td>${esc(d ? d.h || "" : "")}</td><td style="text-align:center"><b>${esc(d ? d.judge || "-" : "未")}</b></td><td>${esc(d ? d.reason || findingsText(d) : "")}</td><td>${esc(d ? (d.acts || []).join("・") : "")}</td></tr>`; };
-  const head = `<tr><th>番号</th><th>管理番号</th><th>樹種</th><th>所在</th><th>幹周cm</th><th>樹高m</th><th>判定</th><th>判定理由</th><th>処置</th></tr>`;
+  const row = t => { const d = latest(t); return `<tr><td>${noStr(t.no)}</td><td>${esc(t.name || "")}</td><td>${esc(t.place || "")}</td><td>${esc(d ? d.g || "" : "")}</td><td>${esc(d ? d.h || "" : "")}</td><td style="text-align:center"><b>${esc(d ? d.judge || "-" : "未")}</b></td><td>${esc(d ? d.reason || findingsText(d) : "")}</td><td>${esc(d ? (d.acts || []).join("・") : "")}</td></tr>`; };
+  const head = `<tr><th>番号</th><th>樹種</th><th>所在</th><th>幹周cm</th><th>樹高m</th><th>判定</th><th>判定理由</th><th>処置</th></tr>`;
   const bad = ts.filter(t => { const d = latest(t); return d && (d.judge === "C" || d.judge === "B2"); });
   let html = `<div class="pg"><h1>${esc(proj.title || proj.name)}<br><span style="font-size:14pt">樹木診断報告書</span></h1>
   <table class="cover" style="width:80%;margin:0 auto"><tr><th>発注者</th><td>${esc(proj.client || "")}</td></tr><tr><th>受注者</th><td>${esc(proj.contractor || "")}</td></tr>
@@ -941,7 +957,6 @@ async function treeField(k, v, relabel) {
   toast("保存しました");
 }
 $("dNum").onchange = async () => { const n = parseInt($("dNum").value, 10); if (!n) return; await treeField("no", n, true); $("dNo").textContent = noStr(n); };
-$("dMg").onchange = () => treeField("mgmtNo", $("dMg").value.trim(), true);
 $("dName").onchange = () => treeField("name", $("dName").value.trim(), true);
 $("dPlace").onchange = () => treeField("place", $("dPlace").value.trim(), true);
 $("dMemo").onchange = () => treeField("memo", $("dMemo").value, false);
