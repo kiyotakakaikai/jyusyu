@@ -249,7 +249,7 @@ async function frameBlob() {
   const W = v.clientWidth, H = v.clientHeight, w = v.videoWidth, h = v.videoHeight;
   if (W && H) {
     const s = Math.max(W / w, H / h), ox = (W - w * s) / 2, oy = (H - h * s) / 2;
-    const size = 0.52 * Math.min(W, H), cx = W / 2, cy = 0.34 * H;
+    const size = 0.52 * Math.min(W, H) * 1.2, cx = W / 2, cy = 0.34 * H;
     let sx = (cx - size / 2 - ox) / s, sy = (cy - size / 2 - oy) / s, sw = size / s, sh = size / s;
     sx = Math.max(0, Math.min(sx, w - 1)); sy = Math.max(0, Math.min(sy, h - 1));
     sw = Math.min(sw, w - sx); sh = Math.min(sh, h - sy);
@@ -262,15 +262,14 @@ async function frameBlob() {
   }
   return toBlob(canvasOf(v, v.videoWidth, v.videoHeight, 2048), .9);
 }
-async function identify(blob) {
+async function identify(shots) {
   const key = store.get("pn_key");
   if (!key) {
     if (store.get("pn_demo") === "1") { await new Promise(r => setTimeout(r, 400)); return [{ score: .62, names: ["Yoshino cherry"], sci: "Prunus × yedoensis", fam: "Rosaceae" }, { score: .18, names: [], sci: "Prunus jamasakura", fam: "Rosaceae" }, { score: .07, names: [], sci: "Prunus mume", fam: "Rosaceae" }]; }
     throw new Error("NOKEY");
   }
   const fd = new FormData();
-  fd.append("images", await resizeBlob(blob, 1280), "photo.jpg");
-  fd.append("organs", $("organ").value);
+  for (const sh of shots) { fd.append("images", await resizeBlob(sh.blob, 1280), "photo.jpg"); fd.append("organs", sh.organ); }
   const r = await fetch("https://my-api.plantnet.org/v2/identify/all?include-related-images=false&nb-results=5&lang=ja&api-key=" + encodeURIComponent(key), { method: "POST", body: fd });
   if (!r.ok) {
     if (r.status === 401) throw new Error("キーが無効です（private keyか確認）");
@@ -288,15 +287,22 @@ function renderCands() {
   $("lp").textContent = "確信度 " + pct + "%" + (pct < 50 ? "（要確認）" : ""); $("label").style.display = "block";
   $("cands").innerHTML = last.list.map((x, i) => `<div data-i="${i}" class="${i === last.sel ? "sel" : ""}"><span>${esc(dispName(x))}<small style="opacity:.6"> ${esc(x.sci)}</small></span><b>${Math.round(x.score * 100)}%</b></div>`).join("");
 }
+let shots = [], adding = false;
 async function run(getBlob) {
   if (busy) return; busy = true; $("shot").disabled = true; $("shot").textContent = "判定中…";
   try {
-    const blob = await getBlob(), list = await identify(blob);
+    const blob = await getBlob();
+    if (adding && shots.length) shots.push({ blob, organ: $("organ").value }); else shots = [{ blob, organ: $("organ").value }];
+    if (shots.length > 3) shots = shots.slice(-3);
+    adding = false;
+    const list = await identify(shots);
     if (!list.length) msg("候補なし。葉か樹皮にもっと寄ってください。");
     else {
-      last = { blob, at: Date.now(), organ: $("organ").value, list, sel: 0 };
+      last = { blob: shots[0].blob, at: Date.now(), organ: shots[0].organ, list, sel: 0 };
       renderCands(); $("reg").disabled = false; $("reg").classList.add("primary");
-      msg(list[0].score < .4 ? "確信度が低め。葉を正面から/樹皮をアップで撮り直すと改善します。" : "候補をタップで選び直し → 「カルテに登録」");
+      $("addShot").style.display = shots.length < 3 ? "" : "none";
+      $("addShot").textContent = `＋ 別の部位を追加して再判定（現在${shots.length}枚）`;
+      msg(shots.length > 1 ? `${shots.length}枚（${shots.map(x => ORGAN_JA[x.organ] || x.organ).join("＋")}）でまとめて判定しました。` : (list[0].score < .4 ? "確信度が低め。「別の部位を追加」で葉＋樹皮のように送ると改善します。" : "候補をタップで選び直し → 「カルテに登録」"));
       const L = last;
       await Promise.all(list.map(async x => { const jp = (x.names || []).find(n => JA_RE.test(n)); x.ja = jp || await toJa(x.sci); }));
       if (L === last) renderCands();
@@ -915,6 +921,7 @@ $("sTest").onclick = async () => { store.set("gas_url", $("gasUrl").value.trim()
 $("sSync").onclick = () => { saveSettings(); sync(false); };
 
 $("shot").onclick = () => { if (!camOK) { $("file").click(); return; } run(frameBlob); };
+$("addShot").onclick = () => { adding = true; msg("別の部位を枠に入れ、器官の選択も切り替えて「判定する」を押してください（写真ボタンで選んでも追加されます）"); };
 $("pick").onclick = () => $("file").click();
 $("file").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) run(async () => f); };
 $("cands").onclick = e => { const d = e.target.closest("[data-i]"); if (!d || !last) return; last.sel = +d.dataset.i; renderCands(); };
